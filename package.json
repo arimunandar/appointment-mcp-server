@@ -1,0 +1,42 @@
+{
+  "name": "appointment-mcp-server",
+  "version": "1.0.0",
+  "description": "Simple MCP Server for appointment management",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "appointment-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod 755 build/index.js",
+    "start": "node build/index.js",
+    "dev": "npm run build && npm start",
+    "prepublishOnly": "npm run build"
+  },
+  "files": ["build", "README.md"],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["mcp", "server", "appointment", "claude", "anthropic", "model-context-protocol"],
+  "author": "Ari",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arimunandar/appointment-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arimunandar/appointment-mcp-server/issues"
+  },
+  "homepage": "https://github.com/arimunandar/appointment-mcp-server#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

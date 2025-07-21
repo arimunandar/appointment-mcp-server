@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "appointment-mcp": {
+      "command": "node",
+      "args": [
+        "/Users/ari/Projects/AI/POC/appointment_mcp/build/index.js"
+      ],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
