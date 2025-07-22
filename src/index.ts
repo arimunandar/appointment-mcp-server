@@ -1651,9 +1651,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         
-        const hours = await getBusinessHours();
+        const result = await getBusinessHours();
         
-        if (!hours || hours.length === 0) {
+        if (!result || !result.success || !result.working_hours || result.working_hours.length === 0) {
           return {
             content: [
               {
@@ -1664,10 +1664,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        const hoursList = hours
+        const hoursList = result.working_hours
           .map((hour: any) => 
-            `${dayNames[hour.day_of_week]}: ${hour.is_open ? `${hour.open_time} - ${hour.close_time}` : 'Closed'}`
+            `${hour.day_name}: ${hour.formatted_hours}`
           )
           .join("\n");
 
