@@ -1,7 +1,7 @@
 {
   "name": "appointment-mcp-server",
-  "version": "1.7.2",
-  "description": "MCP Server for appointment management with PostgreSQL support",
+  "version": "1.8.0",
+  "description": "Customer-focused MCP Server for appointment management with comprehensive service discovery, availability checking, and booking capabilities",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -24,7 +24,6 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.5.0",
-    "appointment-mcp-server": "^1.7.2",
     "pg": "^8.11.0",
     "zod": "^3.22.4"
   },
