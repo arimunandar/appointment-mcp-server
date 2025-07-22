@@ -456,6 +456,37 @@ export async function createReview(reviewData: {
 }
 
 // Appointment management functions
+// Helper function to create customer if they don't exist
+export async function createCustomerIfNotExists(customerName: string, email?: string, phone?: string) {
+  try {
+    // First try to find existing customer
+    const existingCustomers = await searchCustomers(customerName);
+    
+    if (existingCustomers.length > 0) {
+      return existingCustomers[0];
+    }
+    
+    // If no customer found, create a new one
+    const nameParts = customerName.trim().split(' ');
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.slice(1).join(' ') || '';
+    
+    const customerData = {
+      first_name: firstName,
+      last_name: lastName,
+      email: email || null,
+      phone: phone || '000-000-0000', // Default phone if none provided
+      notes: `Auto-created from appointment booking`
+    };
+    
+    const newCustomer = await createCustomer(customerData);
+    console.log(`Created new customer: ${firstName} ${lastName} (ID: ${newCustomer.id})`);
+    return newCustomer;
+  } catch (error: any) {
+    throw new Error(`Failed to create customer: ${error.message}`);
+  }
+}
+
 export async function createAppointment(appointmentData: {
   customer_id: string;
   service_id: string;
@@ -465,17 +496,85 @@ export async function createAppointment(appointmentData: {
   notes?: string;
 }) {
   try {
+    // Validate and potentially resolve customer_id
+    let customerId = appointmentData.customer_id;
+    
+    // If customer_id is not a valid UUID, try to find customer by name
+    if (!isValidUUID(customerId)) {
+      console.log(`Customer ID "${customerId}" is not a valid UUID, searching by name...`);
+      
+      // Search for customer by name
+      const customers = await searchCustomers(customerId);
+      if (customers.length === 0) {
+        // Try to create customer if they don't exist
+        console.log(`No customer found, attempting to create customer: ${customerId}`);
+        const newCustomer = await createCustomerIfNotExists(customerId);
+        customerId = newCustomer.id;
+      } else if (customers.length > 1) {
+        throw new Error(`Multiple customers found with name "${customerId}". Please use a specific customer ID.`);
+      } else {
+        customerId = customers[0].id;
+        console.log(`Found customer: ${customers[0].first_name} ${customers[0].last_name} (ID: ${customerId})`);
+      }
+    }
+    
+    // Validate service_id
+    if (!isValidUUID(appointmentData.service_id)) {
+      throw new Error(`Invalid service ID format: ${appointmentData.service_id}`);
+    }
+    
+    // Validate staff_id if provided
+    if (appointmentData.staff_id && !isValidUUID(appointmentData.staff_id)) {
+      throw new Error(`Invalid staff ID format: ${appointmentData.staff_id}`);
+    }
+
+    // Get service details to calculate duration and price
+    const serviceResult = await query(
+      'SELECT duration_minutes, price_cents FROM services WHERE id = $1 AND business_id = $2',
+      [appointmentData.service_id, BUSINESS_ID]
+    );
+    
+    if (serviceResult.rows.length === 0) {
+      throw new Error(`Service not found: ${appointmentData.service_id}`);
+    }
+    
+    const service = serviceResult.rows[0];
+    
+    // Calculate duration from start and end times
+    const startTime = new Date(appointmentData.start_time);
+    const endTime = new Date(appointmentData.end_time);
+    const durationMinutes = Math.round((endTime.getTime() - startTime.getTime()) / (1000 * 60));
+
+    // Check the actual status constraint in the database
+    try {
+      const constraintResult = await query(
+        `SELECT conname, pg_get_constraintdef(oid) as definition
+         FROM pg_constraint 
+         WHERE conrelid = 'appointments'::regclass 
+         AND contype = 'c' 
+         AND conname LIKE '%status%'`
+      );
+      
+      if (constraintResult.rows.length > 0) {
+        console.log('Status constraints found:', constraintResult.rows);
+      }
+    } catch (constraintError) {
+      console.log('Could not check status constraints:', constraintError);
+    }
+
     const result = await query(
-      `INSERT INTO appointments (business_id, customer_id, service_id, staff_id, start_time, end_time, status, notes, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO appointments (business_id, customer_id, service_id, staff_id, start_time, end_time, duration_minutes, price_cents, status, notes, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         BUSINESS_ID,
-        appointmentData.customer_id,
+        customerId,
         appointmentData.service_id,
         appointmentData.staff_id || null,
         appointmentData.start_time,
         appointmentData.end_time,
+        durationMinutes,
+        service.price_cents,
         'scheduled',
         appointmentData.notes || null,
         new Date().toISOString(),
@@ -485,6 +584,20 @@ export async function createAppointment(appointmentData: {
 
     return result.rows[0];
   } catch (error: any) {
+    // Enhanced error logging
+    console.error('Appointment creation error details:', {
+      error: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      where: error.where
+    });
+    
+    // If it's a status constraint error, provide more specific guidance
+    if (error.message.includes('mvp_status_check') || error.message.includes('status')) {
+      throw new Error(`Status constraint violation. Valid status values are: 'scheduled', 'confirmed', 'canceled', 'completed', 'no_show'. Error: ${error.message}`);
+    }
+    
     throw new Error(`Failed to create appointment: ${error.message}`);
   }
 }

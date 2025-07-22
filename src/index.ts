@@ -60,7 +60,9 @@ import {
   getServicesByDuration,
   getServicesByStaff,
   getServicesByTimeAvailability,
-  getPopularServices
+  getPopularServices,
+  // Helper functions
+  createCustomerIfNotExists
 } from "./database.js";
 
 // Get BUSINESS_ID from environment variables
@@ -2439,6 +2441,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    case "create_customer_by_name": {
+      const schema = z.object({
+        customer_name: z.string().min(1, "Customer name is required"),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const { customer_name, email, phone, notes } = parsedArgs;
+        
+        // Use the helper function to create or find customer
+        const customer = await createCustomerIfNotExists(customer_name, email, phone);
+        
+        // Update notes if provided
+        if (notes) {
+          await updateCustomer(customer.id, { notes });
+          customer.notes = notes;
+        }
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Customer created/found successfully!\n\nID: ${customer.id}\nName: ${customer.first_name} ${customer.last_name}\nEmail: ${customer.email || 'Not provided'}\nPhone: ${customer.phone_number || 'Not provided'}\nNotes: ${customer.notes || 'No notes'}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error creating/finding customer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       return {
         content: [
@@ -3386,6 +3430,32 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                 },
                 required: [],
+              },
+            },
+            {
+              name: "create_customer_by_name",
+              description: "Create a new customer with a name",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  customer_name: {
+                    type: "string",
+                    description: "Customer's name",
+                  },
+                  email: {
+                    type: "string",
+                    description: "Customer's email (optional)",
+                  },
+                  phone: {
+                    type: "string",
+                    description: "Customer's phone number (optional)",
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Additional notes about the customer (optional)",
+                  },
+                },
+                required: ["customer_name"],
               },
             },
     ],
