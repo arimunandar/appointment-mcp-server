@@ -1,6 +1,6 @@
 {
   "name": "appointment-mcp-server",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "description": "Customer-focused MCP Server for appointment management with comprehensive service discovery, availability checking, and booking capabilities",
   "type": "module",
   "main": "build/index.js",
