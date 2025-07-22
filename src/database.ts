@@ -2,9 +2,14 @@ import { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'crypto';
 
 const databaseUrl = process.env.DATABASE_URL!;
+const BUSINESS_ID = process.env.BUSINESS_ID!;
 
 if (!databaseUrl) {
   throw new Error('Missing DATABASE_URL environment variable. Please check your MCP server configuration.');
+}
+
+if (!BUSINESS_ID) {
+  throw new Error('Missing BUSINESS_ID environment variable. Please check your MCP server configuration.');
 }
 
 // Create PostgreSQL connection pool
@@ -25,23 +30,23 @@ async function query(text: string, params?: any[]): Promise<any> {
 }
 
 // Function to verify database connection and ensure business exists
-export async function ensureBusinessExists(business_id: string): Promise<void> {
+export async function ensureBusinessExists(): Promise<void> {
   try {
     // Check if business exists
     const result = await query(
       'SELECT * FROM businesses WHERE id = $1',
-      [business_id]
+      [BUSINESS_ID]
     );
 
     // If business doesn't exist, create it
     if (result.rows.length === 0) {
       await query(
         'INSERT INTO businesses (id, name, created_at, updated_at) VALUES ($1, $2, $3, $4)',
-        [business_id, `Business ${business_id}`, new Date().toISOString(), new Date().toISOString()]
+        [BUSINESS_ID, `Business ${BUSINESS_ID}`, new Date().toISOString(), new Date().toISOString()]
       );
-      console.log(`Created business with ID: ${business_id}`);
+      console.log(`Created business with ID: ${BUSINESS_ID}`);
     } else {
-      console.log(`Business exists with ID: ${business_id}`);
+      console.log(`Business exists with ID: ${BUSINESS_ID}`);
     }
   } catch (error) {
     console.error('Error ensuring business exists:', error);
@@ -60,15 +65,15 @@ export function isValidUUID(uuid: string): boolean {
   return uuidRegex.test(uuid);
 }
 
-export async function getBusinessDetails(business_id: string) {
+export async function getBusinessDetails() {
   try {
     const result = await query(
       'SELECT * FROM businesses WHERE id = $1',
-      [business_id]
+      [BUSINESS_ID]
     );
 
     if (result.rows.length === 0) {
-      throw new Error(`Business not found: ${business_id}`);
+      throw new Error(`Business not found: ${BUSINESS_ID}`);
     }
 
     return result.rows[0];
@@ -78,7 +83,7 @@ export async function getBusinessDetails(business_id: string) {
 }
 
 // Customer management functions
-export async function createCustomer(business_id: string, customerData: {
+export async function createCustomer(customerData: {
   first_name?: string | null;
   last_name?: string | null;
   email?: string | null;
@@ -91,7 +96,7 @@ export async function createCustomer(business_id: string, customerData: {
    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
    RETURNING *`,
       [
-        business_id,
+        BUSINESS_ID,
         customerData.first_name || null,
         customerData.last_name || null,
         customerData.email || null,
@@ -108,11 +113,11 @@ export async function createCustomer(business_id: string, customerData: {
   }
 }
 
-export async function getCustomer(business_id: string, customer_id: string) {
+export async function getCustomer(customer_id: string) {
   try {
     const result = await query(
       'SELECT * FROM customers WHERE id = $1 AND business_id = $2',
-      [customer_id, business_id]
+      [customer_id, BUSINESS_ID]
     );
 
     if (result.rows.length === 0) {
@@ -125,14 +130,19 @@ export async function getCustomer(business_id: string, customer_id: string) {
   }
 }
 
-export async function searchCustomers(business_id: string, searchTerm: string) {
+export async function searchCustomers(searchTerm: string) {
   try {
     const result = await query(
       `SELECT * FROM customers 
        WHERE business_id = $1 
-       AND (first_name ILIKE $2 OR last_name ILIKE $2 OR email ILIKE $2 OR phone_number ILIKE $2)
+       AND (
+         first_name ILIKE $2 
+         OR last_name ILIKE $2 
+         OR email ILIKE $2 
+         OR phone_number ILIKE $2
+       )
        ORDER BY created_at DESC`,
-      [business_id, `%${searchTerm}%`]
+      [BUSINESS_ID, `%${searchTerm}%`]
     );
 
     return result.rows;
@@ -141,7 +151,7 @@ export async function searchCustomers(business_id: string, searchTerm: string) {
   }
 }
 
-export async function updateCustomer(business_id: string, customer_id: string, updates: {
+export async function updateCustomer(customer_id: string, updates: {
   first_name?: string;
   last_name?: string;
   email?: string;
@@ -175,7 +185,7 @@ export async function updateCustomer(business_id: string, customer_id: string, u
     // Add customer_id and business_id for WHERE clause
     const customerIdParam = paramIndex;
     const businessIdParam = paramIndex + 1;
-    values.push(customer_id, business_id);
+    values.push(customer_id, BUSINESS_ID);
 
     const result = await query(
       `UPDATE customers SET ${setClause.join(', ')} 
@@ -195,7 +205,7 @@ export async function updateCustomer(business_id: string, customer_id: string, u
 }
 
 // Service inquiry functions
-export async function getServices(business_id: string) {
+export async function getServices() {
   try {
     const result = await query(
       `SELECT s.*, sc.name as category_name, sc.description as category_description
@@ -203,7 +213,7 @@ export async function getServices(business_id: string) {
        LEFT JOIN service_categories sc ON s.category_id = sc.id
        WHERE s.business_id = $1 AND s.is_active = true
        ORDER BY s.name`,
-      [business_id]
+      [BUSINESS_ID]
     );
 
     return result.rows;
@@ -212,14 +222,14 @@ export async function getServices(business_id: string) {
   }
 }
 
-export async function getService(business_id: string, service_id: string) {
+export async function getService(service_id: string) {
   try {
     const result = await query(
       `SELECT s.*, sc.name as category_name, sc.description as category_description
        FROM services s
        LEFT JOIN service_categories sc ON s.category_id = sc.id
        WHERE s.id = $1 AND s.business_id = $2`,
-      [service_id, business_id]
+      [service_id, BUSINESS_ID]
     );
 
     if (result.rows.length === 0) {
@@ -234,7 +244,7 @@ export async function getService(business_id: string, service_id: string) {
        FROM staff st
        JOIN staff_services ss ON st.id = ss.staff_id
        WHERE ss.service_id = $1 AND st.business_id = $2`,
-      [service_id, business_id]
+      [service_id, BUSINESS_ID]
     );
 
     service.staff = staffResult.rows;
@@ -246,7 +256,7 @@ export async function getService(business_id: string, service_id: string) {
 }
 
 // Customer appointment history
-export async function getCustomerAppointments(business_id: string, customer_id: string, limit?: number) {
+export async function getCustomerAppointments(customer_id: string, limit?: number) {
   try {
     let queryText = `
       SELECT a.*, 
@@ -261,7 +271,7 @@ export async function getCustomerAppointments(business_id: string, customer_id: 
       ORDER BY a.start_time DESC
     `;
 
-    const params = [business_id, customer_id];
+    const params = [BUSINESS_ID, customer_id];
 
     if (limit) {
       queryText += ` LIMIT $3`;
@@ -276,11 +286,11 @@ export async function getCustomerAppointments(business_id: string, customer_id: 
 }
 
 // Business hours and availability
-export async function getBusinessHours(business_id: string) {
+export async function getBusinessHours() {
   try {
     const result = await query(
       'SELECT * FROM working_hours WHERE business_id = $1 ORDER BY day_of_week',
-      [business_id]
+      [BUSINESS_ID]
     );
 
     return result.rows;
@@ -290,7 +300,7 @@ export async function getBusinessHours(business_id: string) {
 }
 
 // Staff information
-export async function getStaff(business_id: string) {
+export async function getStaff() {
   try {
     const result = await query(
       `SELECT st.*,
@@ -306,7 +316,7 @@ export async function getStaff(business_id: string) {
        WHERE st.business_id = $1 AND st.is_active = true
        GROUP BY st.id
        ORDER BY st.first_name`,
-      [business_id]
+      [BUSINESS_ID]
     );
 
     return result.rows;
@@ -316,7 +326,7 @@ export async function getStaff(business_id: string) {
 }
 
 // Customer reviews
-export async function getCustomerReviews(business_id: string, customer_id: string) {
+export async function getCustomerReviews(customer_id: string) {
   try {
     const result = await query(
       `SELECT r.*,
@@ -329,7 +339,7 @@ export async function getCustomerReviews(business_id: string, customer_id: strin
        LEFT JOIN staff st ON r.staff_id = st.id
        WHERE r.business_id = $1 AND r.customer_id = $2
        ORDER BY r.created_at DESC`,
-      [business_id, customer_id]
+      [BUSINESS_ID, customer_id]
     );
 
     return result.rows;
@@ -338,7 +348,7 @@ export async function getCustomerReviews(business_id: string, customer_id: strin
   }
 }
 
-export async function createReview(business_id: string, reviewData: {
+export async function createReview(reviewData: {
   appointment_id: string;
   customer_id: string;
   service_id: string;
@@ -352,7 +362,7 @@ export async function createReview(business_id: string, reviewData: {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
-        business_id,
+        BUSINESS_ID,
         reviewData.appointment_id,
         reviewData.customer_id,
         reviewData.service_id,
@@ -371,7 +381,7 @@ export async function createReview(business_id: string, reviewData: {
 }
 
 // Appointment management functions
-export async function createAppointment(business_id: string, appointmentData: {
+export async function createAppointment(appointmentData: {
   customer_id: string;
   service_id: string;
   staff_id?: string;
@@ -385,7 +395,7 @@ export async function createAppointment(business_id: string, appointmentData: {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
-        business_id,
+        BUSINESS_ID,
         appointmentData.customer_id,
         appointmentData.service_id,
         appointmentData.staff_id || null,
@@ -404,7 +414,7 @@ export async function createAppointment(business_id: string, appointmentData: {
   }
 }
 
-export async function getAppointments(business_id: string, filters?: {
+export async function getAppointments(filters?: {
   customer_id?: string;
   service_id?: string;
   staff_id?: string;
@@ -414,7 +424,7 @@ export async function getAppointments(business_id: string, filters?: {
 }) {
   try {
     let whereClause = 'WHERE a.business_id = $1';
-    const params = [business_id];
+    const params = [BUSINESS_ID];
     let paramIndex = 2;
 
     if (filters?.customer_id) {
@@ -468,7 +478,7 @@ export async function getAppointments(business_id: string, filters?: {
   }
 }
 
-export async function getAppointment(business_id: string, appointment_id: string) {
+export async function getAppointment(appointment_id: string) {
   try {
     const result = await query(
       `SELECT a.*,
@@ -480,7 +490,7 @@ export async function getAppointment(business_id: string, appointment_id: string
        LEFT JOIN services s ON a.service_id = s.id
        LEFT JOIN staff st ON a.staff_id = st.id
        WHERE a.id = $1 AND a.business_id = $2`,
-      [appointment_id, business_id]
+      [appointment_id, BUSINESS_ID]
     );
 
     if (result.rows.length === 0) {
@@ -493,11 +503,11 @@ export async function getAppointment(business_id: string, appointment_id: string
   }
 }
 
-export async function deleteAppointment(business_id: string, appointment_id: string) {
+export async function deleteAppointment(appointment_id: string) {
   try {
     const result = await query(
       'DELETE FROM appointments WHERE id = $1 AND business_id = $2 RETURNING *',
-      [appointment_id, business_id]
+      [appointment_id, BUSINESS_ID]
     );
 
     if (result.rows.length === 0) {
@@ -539,7 +549,7 @@ process.on('SIGTERM', async () => {
 /**
  * Get staff availability for a specific date
  */
-export async function getStaffAvailability(business_id: string, date: string) {
+export async function getStaffAvailability(date: string) {
   try {
     const dayOfWeek = new Date(date).getDay();
     
@@ -575,7 +585,7 @@ export async function getStaffAvailability(business_id: string, date: string) {
       WHERE s.business_id = $1
         AND s.is_active = true
       ORDER BY s.first_name, s.last_name`,
-      [business_id, date, dayOfWeek]
+      [BUSINESS_ID, date, dayOfWeek]
     );
 
     return result.rows;
@@ -587,14 +597,14 @@ export async function getStaffAvailability(business_id: string, date: string) {
 /**
  * Get available time slots for a specific service and date
  */
-export async function getAvailableTimeSlots(business_id: string, service_id: string, date: string) {
+export async function getAvailableTimeSlots(service_id: string, date: string) {
   try {
     const dayOfWeek = new Date(date).getDay();
     
     // First get the service details
     const serviceResult = await query(
       'SELECT id, name, duration_minutes, buffer_time_minutes, max_bookings_per_slot FROM services WHERE id = $1 AND business_id = $2',
-      [service_id, business_id]
+      [service_id, BUSINESS_ID]
     );
 
     if (serviceResult.rows.length === 0) {
@@ -602,75 +612,92 @@ export async function getAvailableTimeSlots(business_id: string, service_id: str
     }
 
     const service = serviceResult.rows[0];
+    const serviceDuration = service.duration_minutes;
+    const bufferTime = service.buffer_time_minutes || 0;
+    const maxBookingsPerSlot = service.max_bookings_per_slot || 1;
 
-    // Get staff who provide this service and their working hours
-    const staffResult = await query(
-      `SELECT 
-        s.id as staff_id,
-        s.first_name,
-        s.last_name,
-        swh.open_time,
-        swh.close_time,
-        swh.is_available
-      FROM staff s
-      JOIN staff_working_hours swh ON s.id = swh.staff_id 
-        AND swh.day_of_week = $3
-      JOIN staff_services ss ON s.id = ss.staff_id AND ss.service_id = $2
-      WHERE s.business_id = $1
-        AND s.is_active = true
-        AND swh.is_available = true`,
-      [business_id, service_id, dayOfWeek]
+    // Get business hours for this day
+    const businessHoursResult = await query(
+      'SELECT open_time, close_time FROM working_hours WHERE business_id = $1 AND day_of_week = $2 AND is_open = true',
+      [BUSINESS_ID, dayOfWeek]
     );
+
+    if (businessHoursResult.rows.length === 0) {
+      return []; // Business is closed on this day
+    }
+
+    const businessHours = businessHoursResult.rows[0];
+    const openTime = businessHours.open_time;
+    const closeTime = businessHours.close_time;
+
+    // Get staff who can provide this service
+    const staffResult = await query(
+      `SELECT DISTINCT s.id, s.first_name, s.last_name
+       FROM staff s
+       JOIN staff_services ss ON s.id = ss.staff_id
+       WHERE ss.service_id = $1 AND s.business_id = $2 AND s.is_active = true`,
+      [service_id, BUSINESS_ID]
+    );
+
+    if (staffResult.rows.length === 0) {
+      return []; // No staff available for this service
+    }
 
     // Get existing appointments for this date
     const appointmentsResult = await query(
-      `SELECT staff_id, COUNT(*) as appointment_count
+      `SELECT staff_id, start_time, end_time
        FROM appointments
-       WHERE business_id = $1 
-         AND service_id = $2
-         AND DATE(start_time) = $3::date
-         AND status IN ('confirmed', 'pending')
-       GROUP BY staff_id`,
-      [business_id, service_id, date]
+       WHERE business_id = $1 AND service_id = $2 AND DATE(start_time) = $3 AND status != 'cancelled'
+       ORDER BY start_time`,
+      [BUSINESS_ID, service_id, date]
     );
 
-    const appointmentCounts = new Map();
-    appointmentsResult.rows.forEach((row: any) => {
-      appointmentCounts.set(row.staff_id, parseInt(row.appointment_count));
-    });
+    const existingAppointments = appointmentsResult.rows;
 
-    // Generate time slots for each staff member
-    const timeSlots: any[] = [];
+    // Generate time slots
+    const timeSlots = [];
+    const slotInterval = 30; // 30-minute intervals
     
-    for (const staff of staffResult.rows) {
-      const existingAppointments = appointmentCounts.get(staff.staff_id) || 0;
+    // Convert time strings to minutes for easier calculation
+    const openMinutes = timeToMinutes(openTime);
+    const closeMinutes = timeToMinutes(closeTime);
+    
+    for (let currentMinutes = openMinutes; currentMinutes + serviceDuration <= closeMinutes; currentMinutes += slotInterval) {
+      const slotStartTime = minutesToTime(currentMinutes);
+      const slotEndTime = minutesToTime(currentMinutes + serviceDuration);
       
-      // Generate 30-minute slots
-      const startTime = new Date(`2000-01-01T${staff.open_time}`);
-      const endTime = new Date(`2000-01-01T${staff.close_time}`);
-      const slotDuration = service.duration_minutes + service.buffer_time_minutes;
+      // Check availability for each staff member
+      const availableStaff = [];
       
-      let currentTime = new Date(startTime);
-      while (currentTime < endTime) {
-        const slotEnd = new Date(currentTime.getTime() + service.duration_minutes * 60000);
+      for (const staff of staffResult.rows) {
+        const isStaffAvailable = !existingAppointments.some((appointment: any) => {
+          if (appointment.staff_id !== staff.id) return false;
+          
+          const appointmentStart = timeToMinutes(appointment.start_time.split('T')[1].substring(0, 5));
+          const appointmentEnd = timeToMinutes(appointment.end_time.split('T')[1].substring(0, 5));
+          
+          // Check for overlap (including buffer time)
+          return (
+            (currentMinutes < appointmentEnd + bufferTime) &&
+            (currentMinutes + serviceDuration + bufferTime > appointmentStart)
+          );
+        });
         
-        if (slotEnd <= endTime) {
-          timeSlots.push({
-            staff_id: staff.staff_id,
-            first_name: staff.first_name,
-            last_name: staff.last_name,
-            service_id: service_id,
-            service_name: service.name,
-            duration_minutes: service.duration_minutes,
-            slot_start_time: currentTime.toTimeString().slice(0, 8),
-            slot_end_time: slotEnd.toTimeString().slice(0, 8),
-            existing_appointments: existingAppointments,
-            max_bookings_per_slot: service.max_bookings_per_slot,
-            availability_status: existingAppointments < service.max_bookings_per_slot ? 'available' : 'fully_booked'
+        if (isStaffAvailable) {
+          availableStaff.push({
+            id: staff.id,
+            name: `${staff.first_name} ${staff.last_name}`
           });
         }
-        
-        currentTime = new Date(currentTime.getTime() + 30 * 60000); // Add 30 minutes
+      }
+      
+      if (availableStaff.length > 0) {
+        timeSlots.push({
+          start_time: slotStartTime,
+          end_time: slotEndTime,
+          available_staff: availableStaff,
+          available_slots: Math.min(availableStaff.length, maxBookingsPerSlot)
+        });
       }
     }
 
@@ -680,10 +707,22 @@ export async function getAvailableTimeSlots(business_id: string, service_id: str
   }
 }
 
+// Helper functions for time conversion
+function timeToMinutes(timeString: string): number {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+}
+
 /**
  * Get all staff information with their services and working hours
  */
-export async function getAllStaffInfo(business_id: string) {
+export async function getAllStaffInfo() {
   try {
     const result = await query(
       `SELECT 
@@ -724,7 +763,7 @@ export async function getAllStaffInfo(business_id: string) {
       WHERE s.business_id = $1
       GROUP BY s.id, s.first_name, s.last_name, s.email, s.phone_number, s.avatar_url, s.bio, s.is_active
       ORDER BY s.first_name, s.last_name`,
-      [business_id]
+      [BUSINESS_ID]
     );
 
     return result.rows;
@@ -736,7 +775,7 @@ export async function getAllStaffInfo(business_id: string) {
 /**
  * Get staff member by ID with detailed information
  */
-export async function getStaffMember(business_id: string, staff_id: string) {
+export async function getStaffMember(staff_id: string) {
   try {
     const result = await query(
       `SELECT 
@@ -787,7 +826,7 @@ export async function getStaffMember(business_id: string, staff_id: string) {
       LEFT JOIN appointments a ON s.id = a.staff_id
       WHERE s.business_id = $1 AND s.id = $2
       GROUP BY s.id, s.first_name, s.last_name, s.email, s.phone_number, s.avatar_url, s.bio, s.is_active`,
-      [business_id, staff_id]
+      [BUSINESS_ID, staff_id]
     );
 
     if (result.rows.length === 0) {
@@ -803,10 +842,10 @@ export async function getStaffMember(business_id: string, staff_id: string) {
 /**
  * Get staff time off for a specific date range
  */
-export async function getStaffTimeOff(business_id: string, start_date?: string, end_date?: string) {
+export async function getStaffTimeOff(start_date?: string, end_date?: string) {
   try {
     let whereClause = 'WHERE sto.business_id = $1';
-    const params = [business_id];
+    const params = [BUSINESS_ID];
     let paramIndex = 2;
 
     if (start_date) {
@@ -849,14 +888,14 @@ export async function getStaffTimeOff(business_id: string, start_date?: string, 
 /**
  * Check if a service is available on a specific date and time
  */
-export async function checkServiceAvailability(business_id: string, service_name: string, date: string, time?: string) {
+export async function checkServiceAvailability(service_name: string, date: string, time?: string) {
   try {
     const dayOfWeek = new Date(date).getDay();
     
     // First, find the service by name
     const serviceResult = await query(
       'SELECT id, name, duration_minutes, buffer_time_minutes, max_bookings_per_slot FROM services WHERE LOWER(name) LIKE LOWER($1) AND business_id = $2 AND is_active = true',
-      [`%${service_name}%`, business_id]
+      [`%${service_name}%`, BUSINESS_ID]
     );
 
     if (serviceResult.rows.length === 0) {
@@ -898,7 +937,7 @@ export async function checkServiceAvailability(business_id: string, service_name
         AND swh.is_available = true
         AND (sto.id IS NULL OR sto.is_all_day = false)
       ORDER BY s.first_name, s.last_name`,
-      [business_id, service.id, date, dayOfWeek]
+      [BUSINESS_ID, service.id, date, dayOfWeek]
     );
 
     if (staffResult.rows.length === 0) {
@@ -936,7 +975,7 @@ export async function checkServiceAvailability(business_id: string, service_name
 
     // Check existing appointments for this service and date at the specific time slot
     let appointmentsQuery = '';
-    let appointmentParams = [business_id, service.id, date];
+    let appointmentParams = [BUSINESS_ID, service.id, date];
     
     if (time) {
       // If specific time is requested, check appointments that overlap with the requested time slot
@@ -999,9 +1038,9 @@ export async function checkServiceAvailability(business_id: string, service_name
 /**
  * Get available time slots for a service on a specific date
  */
-export async function getServiceTimeSlots(business_id: string, service_name: string, date: string) {
+export async function getServiceTimeSlots(service_name: string, date: string) {
   try {
-    const availability = await checkServiceAvailability(business_id, service_name, date);
+    const availability = await checkServiceAvailability(service_name, date);
     
     if (!availability.available) {
       return {
@@ -1032,7 +1071,7 @@ export async function getServiceTimeSlots(business_id: string, service_name: str
           const slotEndTime = slotEnd.toTimeString().slice(0, 8);
           
           // Check if this specific time slot has availability
-          const slotAvailability = await checkServiceAvailability(business_id, service_name, date, slotStartTime);
+          const slotAvailability = await checkServiceAvailability(service_name, date, slotStartTime);
           
           if (slotAvailability.available) {
             timeSlots.push({
@@ -1071,7 +1110,7 @@ export async function getServiceTimeSlots(business_id: string, service_name: str
 /**
  * Check business hours for a specific date
  */
-export async function checkBusinessHours(business_id: string, date: string) {
+export async function checkBusinessHours(date: string) {
   try {
     const dayOfWeek = new Date(date).getDay();
     
@@ -1083,7 +1122,7 @@ export async function checkBusinessHours(business_id: string, date: string) {
         is_closed
       FROM working_hours
       WHERE business_id = $1 AND day_of_week = $2`,
-      [business_id, dayOfWeek]
+      [BUSINESS_ID, dayOfWeek]
     );
 
     if (result.rows.length === 0) {
@@ -1118,7 +1157,6 @@ export async function checkBusinessHours(business_id: string, date: string) {
  * Check for appointment conflicts comprehensively
  */
 export async function checkAppointmentConflict(
-  business_id: string,
   service_id: string,
   staff_id: string,
   customer_id: string,
@@ -1139,7 +1177,7 @@ export async function checkAppointmentConflict(
     // 1. Check if the service exists and is active
     const serviceResult = await query(
       'SELECT id, name, duration_minutes, max_bookings_per_slot, is_active FROM services WHERE id = $1 AND business_id = $2',
-      [service_id, business_id]
+      [service_id, BUSINESS_ID]
     );
 
     if (serviceResult.rows.length === 0) {
@@ -1163,7 +1201,7 @@ export async function checkAppointmentConflict(
     // 2. Check if staff exists and is active
     const staffResult = await query(
       'SELECT id, first_name, last_name, is_active FROM staff WHERE id = $1 AND business_id = $2',
-      [staff_id, business_id]
+      [staff_id, BUSINESS_ID]
     );
 
     if (staffResult.rows.length === 0) {
@@ -1187,7 +1225,7 @@ export async function checkAppointmentConflict(
     // 3. Check if customer exists
     const customerResult = await query(
       'SELECT id, first_name, last_name FROM customers WHERE id = $1 AND business_id = $2',
-      [customer_id, business_id]
+      [customer_id, BUSINESS_ID]
     );
 
     if (customerResult.rows.length === 0) {
@@ -1216,7 +1254,7 @@ export async function checkAppointmentConflict(
     // 5. Check business hours
     const businessHoursResult = await query(
       'SELECT open_time, close_time, is_closed FROM working_hours WHERE business_id = $1 AND day_of_week = $2',
-      [business_id, dayOfWeek]
+      [BUSINESS_ID, dayOfWeek]
     );
 
     if (businessHoursResult.rows.length === 0) {
@@ -1323,7 +1361,7 @@ export async function checkAppointmentConflict(
           (a.start_time <= $3 AND a.end_time >= $4)
         )`;
 
-    const staffConflictParams = [staff_id, business_id, start_time, end_time];
+    const staffConflictParams = [staff_id, BUSINESS_ID, start_time, end_time];
     
     if (appointment_id) {
       staffConflictQuery += ' AND a.id != $5';
@@ -1364,7 +1402,7 @@ export async function checkAppointmentConflict(
           (a.start_time <= $3 AND a.end_time >= $4)
         )`;
 
-    const customerConflictParams = [customer_id, business_id, start_time, end_time];
+    const customerConflictParams = [customer_id, BUSINESS_ID, start_time, end_time];
     
     if (appointment_id) {
       customerConflictQuery += ' AND a.id != $5';
@@ -1397,7 +1435,7 @@ export async function checkAppointmentConflict(
           (start_time <= $4 AND end_time >= $5)
         )`;
 
-    const serviceConflictParams = [business_id, service_id, dateOnly, start_time, end_time];
+    const serviceConflictParams = [BUSINESS_ID, service_id, dateOnly, start_time, end_time];
     
     if (appointment_id) {
       serviceConflictQuery += ' AND id != $6';

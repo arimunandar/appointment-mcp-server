@@ -88,7 +88,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (name) {
     case "create_appointment": {
       const schema = z.object({
-        business_id: z.string().optional(),
         customer_id: z.string().min(1, "Customer ID is required"),
         service_id: z.string().min(1, "Service ID is required"),
         staff_id: z.string().optional(),
@@ -99,13 +98,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
-        const appointmentData = { ...parsedArgs, business_id };
+
+        const appointmentData = { ...parsedArgs };
         
         // Ensure business exists
-        await ensureBusinessExists(business_id);
+        await ensureBusinessExists();
         
-        const appointment = await createAppointment(business_id, appointmentData);
+        const appointment = await createAppointment(appointmentData);
         
         return {
           content: [
@@ -130,7 +129,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "list_appointments": {
       const schema = z.object({
-        business_id: z.string().optional(),
         customer_id: z.string().optional(),
         service_id: z.string().optional(),
         staff_id: z.string().optional(),
@@ -141,10 +139,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
-        const { business_id: _, ...filters } = parsedArgs;
+        const filters = parsedArgs;
         
-        const appointments = await getAppointments(business_id, filters);
+        const appointments = await getAppointments(filters);
 
         if (!appointments || appointments.length === 0) {
           return {
@@ -186,16 +183,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_appointment": {
       const schema = z.object({
-        business_id: z.string().optional(),
         id: z.string().min(1, "Appointment ID is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { id } = parsedArgs;
         
-        const appointment = await getAppointment(business_id, id);
+        const appointment = await getAppointment(id);
 
         return {
           content: [
@@ -220,16 +215,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "delete_appointment": {
       const schema = z.object({
-        business_id: z.string().optional(),
         id: z.string().min(1, "Appointment ID is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { id } = parsedArgs;
         
-        const deletedAppointment = await deleteAppointment(business_id, id);
+        const deletedAppointment = await deleteAppointment(id);
 
         return {
           content: [
@@ -255,14 +248,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Business Information Tools
     case "get_business": {
       const schema = z.object({
-        business_id: z.string().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
+
         
-        const business = await getBusinessDetails(business_id);
+        const business = await getBusinessDetails();
         
         return {
           content: [
@@ -288,7 +280,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Customer Management Tools
     case "create_customer": {
       const schema = z.object({
-        business_id: z.string().optional(),
         first_name: z.string().optional(),
         last_name: z.string().optional(),
         email: z.string().optional(),
@@ -298,11 +289,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
-        const { business_id: _, ...customerData } = parsedArgs;
+        const customerData = parsedArgs;
         
-        await ensureBusinessExists(business_id);
-        const customer = await createCustomer(business_id, customerData);
+        await ensureBusinessExists();
+        const customer = await createCustomer(customerData);
         
         return {
           content: [
@@ -327,16 +317,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_customer": {
       const schema = z.object({
-        business_id: z.string().optional(),
         customer_id: z.string().min(1, "Customer ID is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { customer_id } = parsedArgs;
         
-        const customer = await getCustomer(business_id, customer_id);
+        const customer = await getCustomer(customer_id);
         
         return {
           content: [
@@ -361,16 +349,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "search_customers": {
       const schema = z.object({
-        business_id: z.string().optional(),
         search_term: z.string().min(1, "Search term is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { search_term } = parsedArgs;
         
-        const customers = await searchCustomers(business_id, search_term);
+        const customers = await searchCustomers(search_term);
         
         if (!customers || customers.length === 0) {
           return {
@@ -413,14 +399,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Service Information Tools
     case "get_services": {
       const schema = z.object({
-        business_id: z.string().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
+
         
-        const services = await getServices(business_id);
+        const services = await getServices();
         
         if (!services || services.length === 0) {
           return {
@@ -462,16 +447,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_service": {
       const schema = z.object({
-        business_id: z.string().optional(),
         service_id: z.string().min(1, "Service ID is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { service_id } = parsedArgs;
         
-        const service = await getService(business_id, service_id);
+        const service = await getService(service_id);
         
         const staffList = service.staff && service.staff.length > 0 
           ? service.staff.map((staff: any) => `${staff.first_name} ${staff.last_name}`).join(', ')
@@ -501,17 +484,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Customer History Tools
     case "get_customer_appointments": {
       const schema = z.object({
-        business_id: z.string().optional(),
         customer_id: z.string().min(1, "Customer ID is required"),
         limit: z.number().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { customer_id, limit } = parsedArgs;
         
-        const appointments = await getCustomerAppointments(business_id, customer_id, limit);
+        const appointments = await getCustomerAppointments(customer_id, limit);
         
         if (!appointments || appointments.length === 0) {
           return {
@@ -554,14 +535,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Business Information Tools
     case "get_business_hours": {
       const schema = z.object({
-        business_id: z.string().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
+
         
-        const hours = await getBusinessHours(business_id);
+        const hours = await getBusinessHours();
         
         if (!hours || hours.length === 0) {
           return {
@@ -604,14 +584,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_staff": {
       const schema = z.object({
-        business_id: z.string().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
+
         
-        const staff = await getStaff(business_id);
+        const staff = await getStaff();
         
         if (!staff || staff.length === 0) {
           return {
@@ -657,7 +636,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "update_customer": {
       const schema = z.object({
-        business_id: z.string().optional(),
         customer_id: z.string().min(1, "Customer ID is required"),
         first_name: z.string().optional(),
         last_name: z.string().optional(),
@@ -668,8 +646,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args) as any;
-        const business_id = getBusinessId(parsedArgs.business_id);
-        const { business_id: _, customer_id, phone, ...updates } = parsedArgs;
+        const { customer_id, phone, ...updates } = parsedArgs;
         
         // Include phone in updates since database column is 'phone'
         const customerUpdates: any = { ...updates };
@@ -677,7 +654,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           customerUpdates.phone = phone;
         }
         
-        const customer = await updateCustomer(business_id, customer_id, customerUpdates);
+        const customer = await updateCustomer(customer_id, customerUpdates);
         
         return {
           content: [
@@ -702,16 +679,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_customer_reviews": {
       const schema = z.object({
-        business_id: z.string().optional(),
         customer_id: z.string().min(1, "Customer ID is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { customer_id } = parsedArgs;
         
-        const reviews = await getCustomerReviews(business_id, customer_id);
+        const reviews = await getCustomerReviews(customer_id);
         
         if (!reviews || reviews.length === 0) {
           return {
@@ -753,7 +728,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "create_review": {
       const schema = z.object({
-        business_id: z.string().optional(),
         appointment_id: z.string().min(1, "Appointment ID is required"),
         customer_id: z.string().min(1, "Customer ID is required"),
         service_id: z.string().min(1, "Service ID is required"),
@@ -764,11 +738,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
-        const { business_id: _, ...reviewData } = parsedArgs;
+        const reviewData = parsedArgs;
         
-        await ensureBusinessExists(business_id);
-        const review = await createReview(business_id, reviewData);
+        await ensureBusinessExists();
+        const review = await createReview(reviewData);
         
         return {
           content: [
@@ -794,13 +767,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Availability and Staff Management Tools
     case "get_staff_availability": {
       const schema = z.object({
-        business_id: z.string().optional(),
         date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { date } = parsedArgs;
         
         if (!isValidDate(date)) {
@@ -815,7 +786,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         
-        const availability = await getStaffAvailability(business_id, date);
+        const availability = await getStaffAvailability(date);
         
         if (!availability || availability.length === 0) {
           return {
@@ -863,14 +834,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_available_time_slots": {
       const schema = z.object({
-        business_id: z.string().optional(),
         service_id: z.string().min(1, "Service ID is required"),
         date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { service_id, date } = parsedArgs;
         
         if (!isValidDate(date)) {
@@ -885,7 +854,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         
-        const timeSlots = await getAvailableTimeSlots(business_id, service_id, date);
+        const timeSlots = await getAvailableTimeSlots(service_id, date);
         
         if (!timeSlots || timeSlots.length === 0) {
           return {
@@ -927,14 +896,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_all_staff_info": {
       const schema = z.object({
-        business_id: z.string().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
+
         
-        const staffInfo = await getAllStaffInfo(business_id);
+        const staffInfo = await getAllStaffInfo();
         
         if (!staffInfo || staffInfo.length === 0) {
           return {
@@ -976,16 +944,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_staff_member": {
       const schema = z.object({
-        business_id: z.string().optional(),
         staff_id: z.string().min(1, "Staff ID is required"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { staff_id } = parsedArgs;
         
-        const staff = await getStaffMember(business_id, staff_id);
+        const staff = await getStaffMember(staff_id);
         
         const servicesList = staff.services && staff.services.length > 0 
           ? staff.services.map((service: any) => `${service.name} (${service.duration_minutes} min, $${(service.price_cents / 100).toFixed(2)})`).join(', ')
@@ -1018,14 +984,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_staff_time_off": {
       const schema = z.object({
-        business_id: z.string().optional(),
         start_date: z.string().optional(),
         end_date: z.string().optional(),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { start_date, end_date } = parsedArgs;
         
         if (start_date && !isValidDate(start_date)) {
@@ -1052,7 +1016,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         
-        const timeOff = await getStaffTimeOff(business_id, start_date, end_date);
+        const timeOff = await getStaffTimeOff(start_date, end_date);
         
         if (!timeOff || timeOff.length === 0) {
           const dateRange = start_date && end_date ? ` between ${start_date} and ${end_date}` : start_date ? ` from ${start_date}` : '';
@@ -1096,7 +1060,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // New Availability Checking Tools
     case "check_service_availability": {
       const schema = z.object({
-        business_id: z.string().optional(),
         service_name: z.string().min(1, "Service name is required"),
         date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
         time: z.string().optional(),
@@ -1104,7 +1067,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { service_name, date, time } = parsedArgs;
         
         if (!isValidDate(date)) {
@@ -1119,7 +1081,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         
-        const availability = await checkServiceAvailability(business_id, service_name, date, time);
+        const availability = await checkServiceAvailability(service_name, date, time);
         
         if (!availability.available) {
           return {
@@ -1164,14 +1126,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "get_service_time_slots": {
       const schema = z.object({
-        business_id: z.string().optional(),
         service_name: z.string().min(1, "Service name is required"),
         date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { service_name, date } = parsedArgs;
         
         if (!isValidDate(date)) {
@@ -1186,7 +1146,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         
-        const result = await getServiceTimeSlots(business_id, service_name, date);
+        const result = await getServiceTimeSlots(service_name, date);
         
         if (!result.available) {
           return {
@@ -1228,13 +1188,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "check_business_hours": {
       const schema = z.object({
-        business_id: z.string().optional(),
         date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
       });
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { date } = parsedArgs;
         
         if (!isValidDate(date)) {
@@ -1249,7 +1207,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
         
-        const hours = await checkBusinessHours(business_id, date);
+        const hours = await checkBusinessHours(date);
         
         if (!hours.isOpen) {
           return {
@@ -1285,7 +1243,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "check_appointment_conflict": {
       const schema = z.object({
-        business_id: z.string().optional(),
         service_id: z.string().min(1, "Service ID is required"),
         staff_id: z.string().min(1, "Staff ID is required"),
         customer_id: z.string().min(1, "Customer ID is required"),
@@ -1296,7 +1253,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       try {
         const parsedArgs = schema.parse(args);
-        const business_id = getBusinessId(parsedArgs.business_id);
         const { service_id, staff_id, customer_id, start_time, end_time, appointment_id } = parsedArgs;
         
         // Validate ISO datetime format
@@ -1312,7 +1268,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        const result = await checkAppointmentConflict(business_id, service_id, staff_id, customer_id, start_time, end_time, appointment_id);
+        const result = await checkAppointmentConflict(service_id, staff_id, customer_id, start_time, end_time, appointment_id);
 
         if (result.hasConflicts) {
           const errorConflicts = result.conflicts.filter((c: any) => c.severity === 'ERROR');
