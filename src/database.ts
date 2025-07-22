@@ -255,6 +255,81 @@ export async function getService(service_id: string) {
   }
 }
 
+export async function getServiceByName(service_name: string) {
+  try {
+    const result = await query(
+      `SELECT s.*, sc.name as category_name, sc.description as category_description
+       FROM services s
+       LEFT JOIN service_categories sc ON s.category_id = sc.id
+       WHERE LOWER(s.name) LIKE LOWER($1) AND s.business_id = $2 AND s.is_active = true
+       ORDER BY s.name`,
+      [`%${service_name}%`, BUSINESS_ID]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error(`No services found matching: ${service_name}`);
+    }
+
+    // For each service, get staff information
+    const servicesWithStaff = await Promise.all(
+      result.rows.map(async (service: any) => {
+        const staffResult = await query(
+          `SELECT st.first_name, st.last_name, st.bio, st.avatar_url, st.email, st.phone_number
+           FROM staff st
+           JOIN staff_services ss ON st.id = ss.staff_id
+           WHERE ss.service_id = $1 AND st.business_id = $2 AND st.is_active = true
+           ORDER BY st.first_name, st.last_name`,
+          [service.id, BUSINESS_ID]
+        );
+
+        return {
+          ...service,
+          staff: staffResult.rows,
+          staff_count: staffResult.rows.length
+        };
+      })
+    );
+
+    return servicesWithStaff;
+  } catch (error: any) {
+    throw new Error(`Failed to get service by name: ${error.message}`);
+  }
+}
+
+export async function searchServicesFuzzy(service_name: string, similarity_threshold: number = 0.3) {
+  try {
+    const result = await query(
+      `SELECT * FROM search_services_fuzzy($1, $2)`,
+      [service_name, similarity_threshold]
+    );
+
+    if (!result.rows[0] || !result.rows[0].search_services_fuzzy) {
+      return [];
+    }
+
+    return result.rows[0].search_services_fuzzy;
+  } catch (error: any) {
+    throw new Error(`Failed to search services with fuzzy matching: ${error.message}`);
+  }
+}
+
+export async function searchServicesComprehensive(search_term: string, similarity_threshold: number = 0.3) {
+  try {
+    const result = await query(
+      `SELECT * FROM search_services_comprehensive($1, $2)`,
+      [search_term, similarity_threshold]
+    );
+
+    if (!result.rows[0] || !result.rows[0].search_services_comprehensive) {
+      return [];
+    }
+
+    return result.rows[0].search_services_comprehensive;
+  } catch (error: any) {
+    throw new Error(`Failed to search services comprehensively: ${error.message}`);
+  }
+}
+
 // Customer appointment history
 export async function getCustomerAppointments(customer_id: string, limit?: number) {
   try {
@@ -289,11 +364,11 @@ export async function getCustomerAppointments(customer_id: string, limit?: numbe
 export async function getBusinessHours() {
   try {
     const result = await query(
-      'SELECT * FROM working_hours WHERE business_id = $1 ORDER BY day_of_week',
+      'SELECT * FROM get_business_hours($1)',
       [BUSINESS_ID]
     );
 
-    return result.rows;
+    return result.rows[0].get_business_hours;
   } catch (error: any) {
     throw new Error(`Failed to get business hours: ${error.message}`);
   }
@@ -1156,6 +1231,404 @@ export async function checkBusinessHours(date: string) {
 /**
  * Check for appointment conflicts comprehensively
  */
+// Appointment Lifecycle Management Functions
+export async function updateAppointment(
+  appointment_id: string,
+  customer_id: string,
+  service_id: string,
+  staff_id: string,
+  start_time: string,
+  end_time: string,
+  status: string,
+  notes?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM update_appointment($1, $2, $3, $4, $5, $6, $7, $8)',
+      [appointment_id, customer_id, service_id, staff_id, start_time, end_time, status, notes || '']
+    );
+
+    if (!result.rows[0] || !result.rows[0].update_appointment.success) {
+      throw new Error(result.rows[0]?.update_appointment?.error || 'Failed to update appointment');
+    }
+
+    return result.rows[0].update_appointment;
+  } catch (error: any) {
+    throw new Error(`Failed to update appointment: ${error.message}`);
+  }
+}
+
+export async function cancelAppointment(
+  appointment_id: string,
+  cancellation_reason: string,
+  cancelled_by: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM cancel_appointment($1, $2, $3)',
+      [appointment_id, cancellation_reason, cancelled_by]
+    );
+
+    if (!result.rows[0] || !result.rows[0].cancel_appointment.success) {
+      throw new Error(result.rows[0]?.cancel_appointment?.error || 'Failed to cancel appointment');
+    }
+
+    return result.rows[0].cancel_appointment;
+  } catch (error: any) {
+    throw new Error(`Failed to cancel appointment: ${error.message}`);
+  }
+}
+
+export async function rescheduleAppointment(
+  appointment_id: string,
+  new_start_time: string,
+  new_end_time: string,
+  rescheduled_by: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM reschedule_appointment($1, $2, $3, $4)',
+      [appointment_id, new_start_time, new_end_time, rescheduled_by]
+    );
+
+    if (!result.rows[0] || !result.rows[0].reschedule_appointment.success) {
+      throw new Error(result.rows[0]?.reschedule_appointment?.error || 'Failed to reschedule appointment');
+    }
+
+    return result.rows[0].reschedule_appointment;
+  } catch (error: any) {
+    throw new Error(`Failed to reschedule appointment: ${error.message}`);
+  }
+}
+
+export async function confirmAppointment(
+  appointment_id: string,
+  confirmed_by: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM confirm_appointment($1, $2)',
+      [appointment_id, confirmed_by]
+    );
+
+    if (!result.rows[0] || !result.rows[0].confirm_appointment.success) {
+      throw new Error(result.rows[0]?.confirm_appointment?.error || 'Failed to confirm appointment');
+    }
+
+    return result.rows[0].confirm_appointment;
+  } catch (error: any) {
+    throw new Error(`Failed to confirm appointment: ${error.message}`);
+  }
+}
+
+export async function completeAppointment(
+  appointment_id: string,
+  completed_by: string,
+  completion_notes?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM complete_appointment($1, $2, $3)',
+      [appointment_id, completed_by, completion_notes || '']
+    );
+
+    if (!result.rows[0] || !result.rows[0].complete_appointment.success) {
+      throw new Error(result.rows[0]?.complete_appointment?.error || 'Failed to complete appointment');
+    }
+
+    return result.rows[0].complete_appointment;
+  } catch (error: any) {
+    throw new Error(`Failed to complete appointment: ${error.message}`);
+  }
+}
+
+
+
+export async function getStaffAvailabilityCalendar(
+  staff_id: string,
+  start_date: string,
+  end_date: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_staff_availability_calendar($1, $2, $3)',
+      [staff_id, start_date, end_date]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_staff_availability_calendar.success) {
+      throw new Error(result.rows[0]?.get_staff_availability_calendar?.error || 'Failed to get staff availability calendar');
+    }
+
+    return result.rows[0].get_staff_availability_calendar;
+  } catch (error: any) {
+    throw new Error(`Failed to get staff availability calendar: ${error.message}`);
+  }
+}
+
+export async function checkRealTimeAvailability(
+  service_id: string,
+  date: string,
+  time: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM check_real_time_availability($1, $2, $3)',
+      [service_id, date, time]
+    );
+
+    if (!result.rows[0] || !result.rows[0].check_real_time_availability.success) {
+      throw new Error(result.rows[0]?.check_real_time_availability?.error || 'Failed to check real-time availability');
+    }
+
+    return result.rows[0].check_real_time_availability;
+  } catch (error: any) {
+    throw new Error(`Failed to check real-time availability: ${error.message}`);
+  }
+}
+
+
+
+// Customer Management Functions (Customer-Focused)
+export async function createCustomerValidated(
+  first_name: string,
+  last_name: string,
+  email: string,
+  phone: string,
+  notes?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM create_customer_validated($1, $2, $3, $4, $5)',
+      [first_name, last_name, email, phone, notes || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].create_customer_validated.success) {
+      throw new Error(result.rows[0]?.create_customer_validated?.error || 'Failed to create customer');
+    }
+
+    return result.rows[0].create_customer_validated;
+  } catch (error: any) {
+    throw new Error(`Failed to create customer: ${error.message}`);
+  }
+}
+
+export async function updateCustomerProfile(
+  customer_id: string,
+  first_name: string,
+  last_name: string,
+  email: string,
+  phone: string,
+  notes?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM update_customer_profile($1, $2, $3, $4, $5, $6)',
+      [customer_id, first_name, last_name, email, phone, notes || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].update_customer_profile.success) {
+      throw new Error(result.rows[0]?.update_customer_profile?.error || 'Failed to update customer profile');
+    }
+
+    return result.rows[0].update_customer_profile;
+  } catch (error: any) {
+    throw new Error(`Failed to update customer profile: ${error.message}`);
+  }
+}
+
+export async function getCustomerPreferences(customer_id: string) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_customer_preferences($1)',
+      [customer_id]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_customer_preferences.success) {
+      throw new Error(result.rows[0]?.get_customer_preferences?.error || 'Failed to get customer preferences');
+    }
+
+    return result.rows[0].get_customer_preferences;
+  } catch (error: any) {
+    throw new Error(`Failed to get customer preferences: ${error.message}`);
+  }
+}
+
+export async function getCustomerStatistics(customer_id: string) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_customer_statistics($1)',
+      [customer_id]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_customer_statistics.success) {
+      throw new Error(result.rows[0]?.get_customer_statistics?.error || 'Failed to get customer statistics');
+    }
+
+    return result.rows[0].get_customer_statistics;
+  } catch (error: any) {
+    throw new Error(`Failed to get customer statistics: ${error.message}`);
+  }
+}
+
+// Booking & Scheduling Functions (Customer-Focused)
+export async function createBookingValidated(
+  customer_id: string,
+  service_id: string,
+  staff_id: string,
+  start_time: string,
+  notes?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM create_booking_validated($1, $2, $3, $4, $5)',
+      [customer_id, service_id, staff_id, start_time, notes || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].create_booking_validated.success) {
+      throw new Error(result.rows[0]?.create_booking_validated?.error || 'Failed to create booking');
+    }
+
+    return result.rows[0].create_booking_validated;
+  } catch (error: any) {
+    throw new Error(`Failed to create booking: ${error.message}`);
+  }
+}
+
+export async function getBookingConfirmation(appointment_id: string) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_booking_confirmation($1)',
+      [appointment_id]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_booking_confirmation.success) {
+      throw new Error(result.rows[0]?.get_booking_confirmation?.error || 'Failed to get booking confirmation');
+    }
+
+    return result.rows[0].get_booking_confirmation;
+  } catch (error: any) {
+    throw new Error(`Failed to get booking confirmation: ${error.message}`);
+  }
+}
+
+export async function getAvailableBookingSlots(
+  service_id: string,
+  date: string,
+  staff_id?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_available_booking_slots($1, $2, $3)',
+      [service_id, date, staff_id || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_available_booking_slots.success) {
+      throw new Error(result.rows[0]?.get_available_booking_slots?.error || 'Failed to get available booking slots');
+    }
+
+    return result.rows[0].get_available_booking_slots;
+  } catch (error: any) {
+    throw new Error(`Failed to get available booking slots: ${error.message}`);
+  }
+}
+
+
+
+// Additional Customer-Focused Service Discovery Functions
+export async function getServicesByPriceRange(
+  min_price_cents: number = 0,
+  max_price_cents?: number
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_services_by_price_range($1, $2)',
+      [min_price_cents, max_price_cents || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_services_by_price_range.success) {
+      throw new Error(result.rows[0]?.get_services_by_price_range?.error || 'Failed to get services by price range');
+    }
+
+    return result.rows[0].get_services_by_price_range;
+  } catch (error: any) {
+    throw new Error(`Failed to get services by price range: ${error.message}`);
+  }
+}
+
+export async function getServicesByDuration(
+  min_duration_minutes: number = 0,
+  max_duration_minutes?: number
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_services_by_duration($1, $2)',
+      [min_duration_minutes, max_duration_minutes || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_services_by_duration.success) {
+      throw new Error(result.rows[0]?.get_services_by_duration?.error || 'Failed to get services by duration');
+    }
+
+    return result.rows[0].get_services_by_duration;
+  } catch (error: any) {
+    throw new Error(`Failed to get services by duration: ${error.message}`);
+  }
+}
+
+export async function getServicesByStaff(staff_id: string) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_services_by_staff($1)',
+      [staff_id]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_services_by_staff.success) {
+      throw new Error(result.rows[0]?.get_services_by_staff?.error || 'Failed to get services by staff');
+    }
+
+    return result.rows[0].get_services_by_staff;
+  } catch (error: any) {
+    throw new Error(`Failed to get services by staff: ${error.message}`);
+  }
+}
+
+export async function getServicesByTimeAvailability(
+  date: string,
+  time?: string
+) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_services_by_time_availability($1, $2)',
+      [date, time || null]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_services_by_time_availability.success) {
+      throw new Error(result.rows[0]?.get_services_by_time_availability?.error || 'Failed to get services by time availability');
+    }
+
+    return result.rows[0].get_services_by_time_availability;
+  } catch (error: any) {
+    throw new Error(`Failed to get services by time availability: ${error.message}`);
+  }
+}
+
+export async function getPopularServices(limit_count: number = 10) {
+  try {
+    const result = await query(
+      'SELECT * FROM get_popular_services($1)',
+      [limit_count]
+    );
+
+    if (!result.rows[0] || !result.rows[0].get_popular_services.success) {
+      throw new Error(result.rows[0]?.get_popular_services?.error || 'Failed to get popular services');
+    }
+
+    return result.rows[0].get_popular_services;
+  } catch (error: any) {
+    throw new Error(`Failed to get popular services: ${error.message}`);
+  }
+}
+
 export async function checkAppointmentConflict(
   service_id: string,
   staff_id: string,

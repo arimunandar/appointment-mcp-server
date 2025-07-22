@@ -22,6 +22,9 @@ import {
   updateCustomer,
   getServices,
   getService,
+  getServiceByName,
+  searchServicesFuzzy,
+  searchServicesComprehensive,
   getCustomerAppointments,
   getBusinessHours,
   getStaff,
@@ -35,7 +38,29 @@ import {
   checkServiceAvailability,
   getServiceTimeSlots,
   checkBusinessHours,
-  checkAppointmentConflict
+  checkAppointmentConflict,
+  // New Phase 1 functions
+  updateAppointment,
+  cancelAppointment,
+  rescheduleAppointment,
+  confirmAppointment,
+  completeAppointment,
+  getStaffAvailabilityCalendar,
+  checkRealTimeAvailability,
+  // Phase 2 Customer-Focused Functions
+  createCustomerValidated,
+  updateCustomerProfile,
+  getCustomerPreferences,
+  getCustomerStatistics,
+  createBookingValidated,
+  getBookingConfirmation,
+  getAvailableBookingSlots,
+  // Additional Customer-Focused Service Discovery Functions
+  getServicesByPriceRange,
+  getServicesByDuration,
+  getServicesByStaff,
+  getServicesByTimeAvailability,
+  getPopularServices
 } from "./database.js";
 
 // Get BUSINESS_ID from environment variables
@@ -481,6 +506,1093 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    case "get_service_by_name": {
+      const schema = z.object({
+        service_name: z.string().min(1, "Service name is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const { service_name } = parsedArgs;
+        
+        const services = await getServiceByName(service_name);
+        
+        if (!services || services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services found matching "${service_name}".`,
+              },
+            ],
+          };
+        }
+
+        const serviceList = services
+          .map((service: any) => {
+            const staffList = service.staff && service.staff.length > 0 
+              ? service.staff.map((staff: any) => `${staff.first_name} ${staff.last_name}`).join(', ')
+              : 'No staff assigned';
+            
+            return `ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: $${(service.price_cents / 100).toFixed(2)}\nCategory: ${service.category_name || 'Uncategorized'}\nAvailable Staff: ${staffList}\nStaff Count: ${service.staff_count}\nActive: ${service.is_active ? 'Yes' : 'No'}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${services.length} service(s) matching "${service_name}":\n\n${serviceList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving service by name: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "search_services_fuzzy": {
+      const schema = z.object({
+        service_name: z.string().min(1, "Service name is required"),
+        similarity_threshold: z.number().min(0).max(1).optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const { service_name, similarity_threshold = 0.3 } = parsedArgs;
+        
+        const services = await searchServicesFuzzy(service_name, similarity_threshold);
+        
+        if (!services || services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services found matching "${service_name}" with similarity threshold ${similarity_threshold}.`,
+              },
+            ],
+          };
+        }
+
+        const serviceList = services
+          .map((service: any) => {
+            const staffList = service.staff && service.staff.length > 0 
+              ? service.staff.map((staff: any) => `${staff.first_name} ${staff.last_name}`).join(', ')
+              : 'No staff assigned';
+            
+            return `ID: ${service.service_id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: $${(service.price_cents / 100).toFixed(2)}\nSimilarity Score: ${(service.similarity_score * 100).toFixed(1)}%\nCategory: ${service.category?.name || 'Uncategorized'}\nAvailable Staff: ${staffList}\nStaff Count: ${service.staff_count}\nActive: ${service.is_active ? 'Yes' : 'No'}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${services.length} service(s) matching "${service_name}" (fuzzy search):\n\n${serviceList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error searching services with fuzzy matching: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "search_services_comprehensive": {
+      const schema = z.object({
+        search_term: z.string().min(1, "Search term is required"),
+        similarity_threshold: z.number().min(0).max(1).optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const { search_term, similarity_threshold = 0.3 } = parsedArgs;
+        
+        const services = await searchServicesComprehensive(search_term, similarity_threshold);
+        
+        if (!services || services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services found matching "${search_term}" with comprehensive search.`,
+              },
+            ],
+          };
+        }
+
+        const serviceList = services
+          .map((service: any) => {
+            const staffList = service.staff && service.staff.length > 0 
+              ? service.staff.map((staff: any) => `${staff.first_name} ${staff.last_name}`).join(', ')
+              : 'No staff assigned';
+            
+            return `ID: ${service.service_id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: $${(service.price_cents / 100).toFixed(2)}\nSearch Score: ${service.search_score}/100\nMatch Type: ${service.match_type}\nMatched Field: ${service.matched_field}\nCategory: ${service.category?.name || 'Uncategorized'}\nAvailable Staff: ${staffList}\nStaff Count: ${service.staff_count}\nActive: ${service.is_active ? 'Yes' : 'No'}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${services.length} service(s) matching "${search_term}" (comprehensive search):\n\n${serviceList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error searching services comprehensively: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Customer-Focused Appointment Management
+    case "update_appointment": {
+      const schema = z.object({
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+        customer_id: z.string().min(1, "Customer ID is required"),
+        service_id: z.string().min(1, "Service ID is required"),
+        staff_id: z.string().min(1, "Staff ID is required"),
+        start_time: z.string().min(1, "Start time is required"),
+        end_time: z.string().min(1, "End time is required"),
+        status: z.string().min(1, "Status is required"),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await updateAppointment(
+          parsedArgs.appointment_id,
+          parsedArgs.customer_id,
+          parsedArgs.service_id,
+          parsedArgs.staff_id,
+          parsedArgs.start_time,
+          parsedArgs.end_time,
+          parsedArgs.status,
+          parsedArgs.notes
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Appointment updated successfully!\n\nAppointment ID: ${result.appointment.id}\nStatus: ${result.appointment.status}\nUpdated at: ${result.appointment.updated_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error updating appointment: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "cancel_appointment": {
+      const schema = z.object({
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+        cancellation_reason: z.string().min(1, "Cancellation reason is required"),
+        cancelled_by: z.string().min(1, "Cancelled by is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await cancelAppointment(
+          parsedArgs.appointment_id,
+          parsedArgs.cancellation_reason,
+          parsedArgs.cancelled_by
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Appointment cancelled successfully!\n\nAppointment ID: ${result.cancellation.appointment_id}\nCancellation Reason: ${parsedArgs.cancellation_reason}\nCancelled by: ${parsedArgs.cancelled_by}\nCancelled at: ${result.cancellation.cancelled_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error cancelling appointment: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "reschedule_appointment": {
+      const schema = z.object({
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+        new_start_time: z.string().min(1, "New start time is required"),
+        new_end_time: z.string().min(1, "New end time is required"),
+        rescheduled_by: z.string().min(1, "Rescheduled by is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await rescheduleAppointment(
+          parsedArgs.appointment_id,
+          parsedArgs.new_start_time,
+          parsedArgs.new_end_time,
+          parsedArgs.rescheduled_by
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Appointment rescheduled successfully!\n\nAppointment ID: ${result.reschedule.appointment_id}\nOld Start Time: ${result.reschedule.old_start_time}\nNew Start Time: ${result.reschedule.new_start_time}\nRescheduled by: ${parsedArgs.rescheduled_by}\nRescheduled at: ${result.reschedule.rescheduled_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error rescheduling appointment: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "confirm_appointment": {
+      const schema = z.object({
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+        confirmed_by: z.string().min(1, "Confirmed by is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await confirmAppointment(
+          parsedArgs.appointment_id,
+          parsedArgs.confirmed_by
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Appointment confirmed successfully!\n\nAppointment ID: ${result.confirmation.appointment_id}\nStatus: ${result.confirmation.status}\nConfirmed by: ${parsedArgs.confirmed_by}\nConfirmed at: ${result.confirmation.confirmed_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error confirming appointment: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "complete_appointment": {
+      const schema = z.object({
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+        completed_by: z.string().min(1, "Completed by is required"),
+        completion_notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await completeAppointment(
+          parsedArgs.appointment_id,
+          parsedArgs.completed_by,
+          parsedArgs.completion_notes
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Appointment completed successfully!\n\nAppointment ID: ${result.completion.appointment_id}\nStatus: ${result.completion.status}\nCompletion Notes: ${parsedArgs.completion_notes || 'None'}\nCompleted by: ${parsedArgs.completed_by}\nCompleted at: ${result.completion.completed_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error completing appointment: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "check_real_time_availability": {
+      const schema = z.object({
+        service_id: z.string().min(1, "Service ID is required"),
+        date: z.string().min(1, "Date is required"),
+        time: z.string().min(1, "Time is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await checkRealTimeAvailability(
+          parsedArgs.service_id,
+          parsedArgs.date,
+          parsedArgs.time
+        );
+
+        const availabilityText = result.available 
+          ? `✅ Available! ${result.reason}\n\nRemaining slots: ${result.remaining_slots}\nAvailable staff: ${result.available_staff}`
+          : `❌ Not available: ${result.reason}\n\nExisting bookings: ${result.existing_bookings}\nMax bookings: ${result.max_bookings}\nAvailable staff: ${result.available_staff}`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Real-time availability check for ${parsedArgs.date} at ${parsedArgs.time}:\n\n${availabilityText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error checking real-time availability: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_staff_availability_calendar": {
+      const schema = z.object({
+        staff_id: z.string().min(1, "Staff ID is required"),
+        start_date: z.string().min(1, "Start date is required"),
+        end_date: z.string().min(1, "End date is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getStaffAvailabilityCalendar(
+          parsedArgs.staff_id,
+          parsedArgs.start_date,
+          parsedArgs.end_date
+        );
+
+        if (!result.availability || result.availability.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No availability data found for staff member from ${parsedArgs.start_date} to ${parsedArgs.end_date}.`,
+              },
+            ],
+          };
+        }
+
+        const calendarText = result.availability
+          .map((day: any) => {
+            const status = day.is_available ? '✅ Available' : '❌ Not Available';
+            const appointments = day.appointments && day.appointments.length > 0
+              ? day.appointments.map((apt: any) => `${apt.service_name} with ${apt.customer_name} (${apt.start_time})`).join(', ')
+              : 'No appointments';
+            
+            return `${day.date} (${day.day_name}): ${status}\nWorking Hours: ${day.working_hours || 'Not set'}\nAppointments: ${appointments}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Staff Availability Calendar for ${parsedArgs.start_date} to ${parsedArgs.end_date}:\n\n${calendarText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting staff availability calendar: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Phase 2 Customer-Focused Tools
+    case "create_customer_validated": {
+      const schema = z.object({
+        first_name: z.string().min(1, "First name is required"),
+        last_name: z.string().min(1, "Last name is required"),
+        email: z.string().email("Invalid email format"),
+        phone: z.string().min(10, "Phone number must be at least 10 digits"),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await createCustomerValidated(
+          parsedArgs.first_name,
+          parsedArgs.last_name,
+          parsedArgs.email,
+          parsedArgs.phone,
+          parsedArgs.notes
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Customer created successfully!\n\nCustomer ID: ${result.customer.id}\nName: ${result.customer.first_name} ${result.customer.last_name}\nEmail: ${result.customer.email}\nPhone: ${result.customer.phone_number}\nCreated: ${result.customer.created_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error creating customer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "update_customer_profile": {
+      const schema = z.object({
+        customer_id: z.string().min(1, "Customer ID is required"),
+        first_name: z.string().min(1, "First name is required"),
+        last_name: z.string().min(1, "Last name is required"),
+        email: z.string().email("Invalid email format"),
+        phone: z.string().min(10, "Phone number must be at least 10 digits"),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await updateCustomerProfile(
+          parsedArgs.customer_id,
+          parsedArgs.first_name,
+          parsedArgs.last_name,
+          parsedArgs.email,
+          parsedArgs.phone,
+          parsedArgs.notes
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Customer profile updated successfully!\n\nCustomer ID: ${result.customer.id}\nName: ${result.customer.first_name} ${result.customer.last_name}\nEmail: ${result.customer.email}\nPhone: ${result.customer.phone_number}\nUpdated: ${result.customer.updated_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error updating customer profile: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_customer_preferences": {
+      const schema = z.object({
+        customer_id: z.string().min(1, "Customer ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getCustomerPreferences(parsedArgs.customer_id);
+
+        const preferences = result.preferences;
+        const preferredServices = preferences.preferred_services || [];
+        const preferredStaff = preferences.preferred_staff || [];
+        const preferredTimeSlots = preferences.preferred_time_slots || [];
+
+        let preferencesText = `Customer Preferences for ${parsedArgs.customer_id}:\n\n`;
+        
+        if (preferredServices.length > 0) {
+          preferencesText += `Preferred Services:\n${preferredServices.map((service: any) => 
+            `- ${service.service_name} (${service.booking_count} bookings, last: ${service.last_booking})`
+          ).join('\n')}\n\n`;
+        }
+
+        if (preferredStaff.length > 0) {
+          preferencesText += `Preferred Staff:\n${preferredStaff.map((staff: any) => 
+            `- ${staff.staff_name} (${staff.booking_count} bookings, last: ${staff.last_booking})`
+          ).join('\n')}\n\n`;
+        }
+
+        if (preferredTimeSlots.length > 0) {
+          preferencesText += `Preferred Time Slots:\n${preferredTimeSlots.map((slot: any) => 
+            `- ${slot.time_slot} (${slot.booking_count} bookings)`
+          ).join('\n')}\n\n`;
+        }
+
+        preferencesText += `Total Appointments: ${preferences.total_appointments}\n`;
+        preferencesText += `Completed Appointments: ${preferences.completed_appointments}\n`;
+        preferencesText += `Average Rating: ${preferences.average_rating.toFixed(1)}/5`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: preferencesText,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting customer preferences: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_customer_statistics": {
+      const schema = z.object({
+        customer_id: z.string().min(1, "Customer ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getCustomerStatistics(parsedArgs.customer_id);
+
+        const stats = result.statistics;
+        const aptStats = stats.appointment_stats;
+        const serviceStats = stats.service_stats;
+        const staffStats = stats.staff_stats;
+        const reviewStats = stats.review_stats;
+        const loyaltyStats = stats.loyalty_stats;
+
+        let statsText = `Customer Statistics for ${parsedArgs.customer_id}:\n\n`;
+        
+        statsText += `📊 Appointment Statistics:\n`;
+        statsText += `- Total Appointments: ${aptStats.total_appointments}\n`;
+        statsText += `- Completed: ${aptStats.completed_appointments}\n`;
+        statsText += `- Cancelled: ${aptStats.cancelled_appointments}\n`;
+        statsText += `- Upcoming: ${aptStats.upcoming_appointments}\n`;
+        statsText += `- First Appointment: ${aptStats.first_appointment || 'N/A'}\n`;
+        statsText += `- Last Appointment: ${aptStats.last_appointment || 'N/A'}\n\n`;
+
+        statsText += `💰 Service Statistics:\n`;
+        statsText += `- Services Used: ${serviceStats.total_services_used}\n`;
+        statsText += `- Most Used Service: ${serviceStats.most_used_service || 'N/A'}\n`;
+        statsText += `- Total Spent: $${(serviceStats.total_spent / 100).toFixed(2)}\n\n`;
+
+        statsText += `👥 Staff Statistics:\n`;
+        statsText += `- Staff Seen: ${staffStats.total_staff_seen}\n`;
+        statsText += `- Preferred Staff: ${staffStats.preferred_staff || 'N/A'}\n\n`;
+
+        statsText += `⭐ Review Statistics:\n`;
+        statsText += `- Total Reviews: ${reviewStats.total_reviews}\n`;
+        statsText += `- Average Rating: ${reviewStats.average_rating.toFixed(1)}/5\n`;
+        statsText += `- Last Review: ${reviewStats.last_review_date || 'N/A'}\n\n`;
+
+        statsText += `🎯 Loyalty Statistics:\n`;
+        statsText += `- Customer Since: ${loyaltyStats.customer_since}\n`;
+        statsText += `- Days Since Last Visit: ${loyaltyStats.days_since_last_visit || 'N/A'}\n`;
+        statsText += `- Visit Frequency: ${loyaltyStats.visit_frequency ? loyaltyStats.visit_frequency.toFixed(1) + ' days' : 'N/A'}`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: statsText,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting customer statistics: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "create_booking_validated": {
+      const schema = z.object({
+        customer_id: z.string().min(1, "Customer ID is required"),
+        service_id: z.string().min(1, "Service ID is required"),
+        staff_id: z.string().min(1, "Staff ID is required"),
+        start_time: z.string().min(1, "Start time is required"),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await createBookingValidated(
+          parsedArgs.customer_id,
+          parsedArgs.service_id,
+          parsedArgs.staff_id,
+          parsedArgs.start_time,
+          parsedArgs.notes
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Booking created successfully!\n\nAppointment ID: ${result.booking.appointment_id}\nCustomer ID: ${result.booking.customer_id}\nService ID: ${result.booking.service_id}\nStaff ID: ${result.booking.staff_id}\nStart Time: ${result.booking.start_time}\nEnd Time: ${result.booking.end_time}\nStatus: ${result.booking.status}\nCreated: ${result.booking.created_at}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error creating booking: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_booking_confirmation": {
+      const schema = z.object({
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getBookingConfirmation(parsedArgs.appointment_id);
+
+        const confirmation = result.confirmation;
+        const customer = confirmation.customer;
+        const service = confirmation.service;
+        const staff = confirmation.staff;
+        const appointment = confirmation.appointment;
+        const business = confirmation.business;
+
+        let confirmationText = `📋 Booking Confirmation\n\n`;
+        confirmationText += `Confirmation Code: ${confirmation.confirmation_code}\n\n`;
+        
+        confirmationText += `👤 Customer:\n`;
+        confirmationText += `- Name: ${customer.name}\n`;
+        confirmationText += `- Email: ${customer.email}\n`;
+        confirmationText += `- Phone: ${customer.phone}\n\n`;
+
+        confirmationText += `🛠️ Service:\n`;
+        confirmationText += `- Name: ${service.name}\n`;
+        confirmationText += `- Description: ${service.description || 'N/A'}\n`;
+        confirmationText += `- Duration: ${service.duration_minutes} minutes\n`;
+        confirmationText += `- Price: ${service.price_formatted}\n\n`;
+
+        if (staff) {
+          confirmationText += `👨‍⚕️ Staff:\n`;
+          confirmationText += `- Name: ${staff.name}\n`;
+          confirmationText += `- Email: ${staff.email}\n`;
+          confirmationText += `- Phone: ${staff.phone}\n\n`;
+        }
+
+        confirmationText += `📅 Appointment:\n`;
+        confirmationText += `- Start Time: ${appointment.start_time}\n`;
+        confirmationText += `- End Time: ${appointment.end_time}\n`;
+        confirmationText += `- Duration: ${appointment.duration_minutes} minutes\n`;
+        confirmationText += `- Status: ${appointment.status}\n`;
+        if (appointment.notes) {
+          confirmationText += `- Notes: ${appointment.notes}\n`;
+        }
+        confirmationText += `\n🏢 Business:\n`;
+        confirmationText += `- Name: ${business.name}\n`;
+        confirmationText += `- Phone: ${business.phone}\n\n`;
+        confirmationText += `Created: ${confirmation.created_at}`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: confirmationText,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting booking confirmation: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_available_booking_slots": {
+      const schema = z.object({
+        service_id: z.string().min(1, "Service ID is required"),
+        date: z.string().min(1, "Date is required"),
+        staff_id: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getAvailableBookingSlots(
+          parsedArgs.service_id,
+          parsedArgs.date,
+          parsedArgs.staff_id
+        );
+
+        if (!result.available_slots || result.available_slots.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No available booking slots found for service on ${parsedArgs.date}.`,
+              },
+            ],
+          };
+        }
+
+        const slotsText = result.available_slots
+          .map((slot: any, index: number) => {
+            const staffList = slot.available_staff && slot.available_staff.length > 0
+              ? slot.available_staff.map((staff: any) => staff.name).join(', ')
+              : 'No staff assigned';
+            
+            return `${index + 1}. ${slot.start_time} - ${slot.end_time}\n   Available Staff: ${staffList}\n   Available Slots: ${slot.available_slots}`;
+          })
+          .join('\n\n');
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Available Booking Slots for ${parsedArgs.date}:\n\n${slotsText}\n\nTotal Slots: ${result.total_slots}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting available booking slots: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Additional Customer-Focused Service Discovery Tools
+    case "get_services_by_price_range": {
+      const schema = z.object({
+        min_price_cents: z.number().min(0, "Minimum price must be 0 or greater").optional(),
+        max_price_cents: z.number().min(0, "Maximum price must be 0 or greater").optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getServicesByPriceRange(
+          parsedArgs.min_price_cents || 0,
+          parsedArgs.max_price_cents
+        );
+
+        if (!result.services || result.services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services found in the specified price range.`,
+              },
+            ],
+          };
+        }
+
+        const servicesText = result.services
+          .map((service: any) => 
+            `ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: ${service.price_formatted}\nCategory: ${service.category_name || 'Uncategorized'}\nStaff Count: ${service.staff_count}\nActive: ${service.is_active ? 'Yes' : 'No'}\n---`
+          )
+          .join("\n");
+
+        const priceRange = parsedArgs.max_price_cents 
+          ? `$${(parsedArgs.min_price_cents || 0) / 100} - $${parsedArgs.max_price_cents / 100}`
+          : `$${(parsedArgs.min_price_cents || 0) / 100} and above`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${result.services.length} service(s) in price range ${priceRange}:\n\n${servicesText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting services by price range: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_services_by_duration": {
+      const schema = z.object({
+        min_duration_minutes: z.number().min(0, "Minimum duration must be 0 or greater").optional(),
+        max_duration_minutes: z.number().min(0, "Maximum duration must be 0 or greater").optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getServicesByDuration(
+          parsedArgs.min_duration_minutes || 0,
+          parsedArgs.max_duration_minutes
+        );
+
+        if (!result.services || result.services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services found in the specified duration range.`,
+              },
+            ],
+          };
+        }
+
+        const servicesText = result.services
+          .map((service: any) => 
+            `ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_formatted}\nPrice: ${service.price_formatted}\nCategory: ${service.category_name || 'Uncategorized'}\nStaff Count: ${service.staff_count}\nActive: ${service.is_active ? 'Yes' : 'No'}\n---`
+          )
+          .join("\n");
+
+        const durationRange = parsedArgs.max_duration_minutes 
+          ? `${parsedArgs.min_duration_minutes || 0} - ${parsedArgs.max_duration_minutes} minutes`
+          : `${parsedArgs.min_duration_minutes || 0} minutes and above`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${result.services.length} service(s) with duration ${durationRange}:\n\n${servicesText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting services by duration: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_services_by_staff": {
+      const schema = z.object({
+        staff_id: z.string().min(1, "Staff ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getServicesByStaff(parsedArgs.staff_id);
+
+        if (!result.services || result.services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services found for this staff member.`,
+              },
+            ],
+          };
+        }
+
+        const staffInfo = result.staff;
+        const servicesText = result.services
+          .map((service: any) => 
+            `ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_formatted}\nPrice: ${service.price_formatted}\nCategory: ${service.category_name || 'Uncategorized'}\nActive: ${service.is_active ? 'Yes' : 'No'}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Services provided by ${staffInfo.name}:\n\nContact: ${staffInfo.email} | ${staffInfo.phone}\nBio: ${staffInfo.bio || 'No bio available'}\n\nServices (${result.services.length}):\n\n${servicesText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting services by staff: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_services_by_time_availability": {
+      const schema = z.object({
+        date: z.string().min(1, "Date is required"),
+        time: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getServicesByTimeAvailability(
+          parsedArgs.date,
+          parsedArgs.time
+        );
+
+        if (!result.services || result.services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No services available on ${parsedArgs.date}${parsedArgs.time ? ` at ${parsedArgs.time}` : ''}.`,
+              },
+            ],
+          };
+        }
+
+        const servicesText = result.services
+          .map((service: any) => {
+            const staffList = service.available_staff && service.available_staff.length > 0
+              ? service.available_staff.map((staff: any) => staff.name).join(', ')
+              : 'No staff available';
+            
+            return `ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: ${service.price_formatted}\nCategory: ${service.category_name || 'Uncategorized'}\nAvailable Staff: ${service.available_staff_count} (${staffList})\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Services available on ${parsedArgs.date}${parsedArgs.time ? ` at ${parsedArgs.time}` : ''}:\n\n${servicesText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting services by time availability: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_popular_services": {
+      const schema = z.object({
+        limit_count: z.number().min(1).max(50).optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const result = await getPopularServices(parsedArgs.limit_count || 10);
+
+        if (!result.services || result.services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No popular services found.`,
+              },
+            ],
+          };
+        }
+
+        const servicesText = result.services
+          .map((service: any, index: number) => 
+            `${index + 1}. ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: ${service.price_formatted}\nCategory: ${service.category_name || 'Uncategorized'}\nBookings (30 days): ${service.booking_count}\nRating: ${service.average_rating.toFixed(1)}/5 (${service.review_count} reviews)\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Top ${result.services.length} Popular Services:\n\n${servicesText}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting popular services: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     // Customer History Tools
     case "get_customer_appointments": {
       const schema = z.object({
@@ -538,8 +1650,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       try {
-        const parsedArgs = schema.parse(args);
-
         
         const hours = await getBusinessHours();
         
@@ -1352,10 +2462,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             customer_id: {
               type: "string",
               description: "The customer ID",
@@ -1390,10 +2496,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             customer_id: {
               type: "string",
               description: "Filter by customer ID (optional)",
@@ -1428,10 +2530,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             id: {
               type: "string",
               description: "The appointment ID",
@@ -1446,10 +2544,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             id: {
               type: "string",
               description: "The appointment ID to delete",
@@ -1460,15 +2554,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_business",
-        description: "Get business details by business ID",
+        description: "Get business details",
         inputSchema: {
           type: "object",
-          properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
-          },
+          properties: {},
           required: [],
         },
       },
@@ -1478,10 +2567,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             first_name: {
               type: "string",
               description: "Customer's first name",
@@ -1512,10 +2597,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             customer_id: {
               type: "string",
               description: "The customer ID",
@@ -1530,10 +2611,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             search_term: {
               type: "string",
               description: "Search term to match against customer name, email, or phone",
@@ -1547,12 +2624,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: "Get all available services",
         inputSchema: {
           type: "object",
-          properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
-          },
+          properties: {},
           required: [],
         },
       },
@@ -1562,10 +2634,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             service_id: {
               type: "string",
               description: "The service ID",
@@ -1575,15 +2643,61 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "get_service_by_name",
+        description: "Search for services by name (supports partial matching)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            service_name: {
+              type: "string",
+              description: "The service name to search for (supports partial matching)",
+            },
+          },
+          required: ["service_name"],
+        },
+      },
+      {
+        name: "search_services_fuzzy",
+        description: "Search for services with fuzzy matching to handle typos and similar names",
+        inputSchema: {
+          type: "object",
+          properties: {
+            service_name: {
+              type: "string",
+              description: "The service name to search for (handles typos and similar names)",
+            },
+            similarity_threshold: {
+              type: "number",
+              description: "Similarity threshold (0.0 to 1.0, default 0.3). Higher values require more exact matches.",
+            },
+          },
+          required: ["service_name"],
+        },
+      },
+      {
+        name: "search_services_comprehensive",
+        description: "Comprehensive service search that searches both names and descriptions with fuzzy matching",
+        inputSchema: {
+          type: "object",
+          properties: {
+            search_term: {
+              type: "string",
+              description: "The search term to look for in service names and descriptions",
+            },
+            similarity_threshold: {
+              type: "number",
+              description: "Similarity threshold (0.0 to 1.0, default 0.3). Higher values require more exact matches.",
+            },
+          },
+          required: ["search_term"],
+        },
+      },
+      {
         name: "get_customer_appointments",
         description: "Get appointment history for a specific customer",
         inputSchema: {
           type: "object",
           properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
             customer_id: {
               type: "string",
               description: "The customer ID",
@@ -1601,26 +2715,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: "Get business operating hours",
         inputSchema: {
           type: "object",
-          properties: {
-            business_id: {
-              type: "string",
-              description: "The business ID",
-            },
-          },
-          required: ["business_id"],
+          properties: {},
+          required: [],
         },
       },
-      {
+                  {
               name: "get_staff",
               description: "Get information about staff members",
               inputSchema: {
                 type: "object",
-                properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
-                },
+                properties: {},
                 required: [],
               },
             },
@@ -1630,10 +2734,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   customer_id: {
                     type: "string",
                     description: "The customer ID",
@@ -1668,16 +2768,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   customer_id: {
                     type: "string",
                     description: "The customer ID",
                   },
                 },
-                required: ["business_id", "customer_id"],
+                required: ["customer_id"],
               },
             },
             {
@@ -1686,10 +2782,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   appointment_id: {
                     type: "string",
                     description: "The appointment ID",
@@ -1724,10 +2816,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   date: {
                     type: "string",
                     description: "The date to check availability (YYYY-MM-DD format)",
@@ -1742,10 +2830,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   service_id: {
                     type: "string",
                     description: "The service ID",
@@ -1763,12 +2847,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Get detailed information about all staff members",
               inputSchema: {
                 type: "object",
-                properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
-                },
+                properties: {},
                 required: [],
               },
             },
@@ -1778,10 +2857,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   staff_id: {
                     type: "string",
                     description: "The staff member ID",
@@ -1796,10 +2871,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   start_date: {
                     type: "string",
                     description: "Start date for time off (YYYY-MM-DD format, optional)",
@@ -1818,10 +2889,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   service_name: {
                     type: "string",
                     description: "The name of the service",
@@ -1844,10 +2911,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   service_name: {
                     type: "string",
                     description: "The name of the service",
@@ -1866,10 +2929,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   date: {
                     type: "string",
                     description: "The date to check business hours (YYYY-MM-DD format)",
@@ -1884,10 +2943,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  business_id: {
-                    type: "string",
-                    description: "The business ID",
-                  },
                   service_id: {
                     type: "string",
                     description: "The service ID",
@@ -1914,6 +2969,423 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                 },
                 required: ["service_id", "staff_id", "customer_id", "start_time", "end_time"],
+              },
+            },
+            // Customer-Focused Appointment Management Tools
+            {
+              name: "update_appointment",
+              description: "Update an existing appointment with new details",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID to update",
+                  },
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID",
+                  },
+                  service_id: {
+                    type: "string",
+                    description: "The service ID",
+                  },
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID",
+                  },
+                  start_time: {
+                    type: "string",
+                    description: "New start time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  end_time: {
+                    type: "string",
+                    description: "New end time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  status: {
+                    type: "string",
+                    description: "New appointment status (scheduled, confirmed, completed, cancelled)",
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Optional notes for the appointment",
+                  },
+                },
+                required: ["appointment_id", "customer_id", "service_id", "staff_id", "start_time", "end_time", "status"],
+              },
+            },
+            {
+              name: "cancel_appointment",
+              description: "Cancel an appointment with a reason",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID to cancel",
+                  },
+                  cancellation_reason: {
+                    type: "string",
+                    description: "Reason for cancellation",
+                  },
+                  cancelled_by: {
+                    type: "string",
+                    description: "Who is cancelling the appointment (customer ID or staff ID)",
+                  },
+                },
+                required: ["appointment_id", "cancellation_reason", "cancelled_by"],
+              },
+            },
+            {
+              name: "reschedule_appointment",
+              description: "Reschedule an appointment to a new time",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID to reschedule",
+                  },
+                  new_start_time: {
+                    type: "string",
+                    description: "New start time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  new_end_time: {
+                    type: "string",
+                    description: "New end time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  rescheduled_by: {
+                    type: "string",
+                    description: "Who is rescheduling the appointment (customer ID or staff ID)",
+                  },
+                },
+                required: ["appointment_id", "new_start_time", "new_end_time", "rescheduled_by"],
+              },
+            },
+            {
+              name: "confirm_appointment",
+              description: "Confirm an appointment",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID to confirm",
+                  },
+                  confirmed_by: {
+                    type: "string",
+                    description: "Who is confirming the appointment (customer ID or staff ID)",
+                  },
+                },
+                required: ["appointment_id", "confirmed_by"],
+              },
+            },
+            {
+              name: "complete_appointment",
+              description: "Mark an appointment as completed",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID to complete",
+                  },
+                  completed_by: {
+                    type: "string",
+                    description: "Who is completing the appointment (staff ID)",
+                  },
+                  completion_notes: {
+                    type: "string",
+                    description: "Optional notes about the completion",
+                  },
+                },
+                required: ["appointment_id", "completed_by"],
+              },
+            },
+            {
+              name: "check_real_time_availability",
+              description: "Check real-time availability for a service at a specific date and time",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  service_id: {
+                    type: "string",
+                    description: "The service ID to check availability for",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check (YYYY-MM-DD format)",
+                  },
+                  time: {
+                    type: "string",
+                    description: "The specific time to check (HH:MM format)",
+                  },
+                },
+                required: ["service_id", "date", "time"],
+              },
+            },
+            {
+              name: "get_staff_availability_calendar",
+              description: "Get a detailed availability calendar for a staff member",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID",
+                  },
+                  start_date: {
+                    type: "string",
+                    description: "Start date for calendar (YYYY-MM-DD format)",
+                  },
+                  end_date: {
+                    type: "string",
+                    description: "End date for calendar (YYYY-MM-DD format)",
+                  },
+                },
+                required: ["staff_id", "start_date", "end_date"],
+              },
+            },
+            // Phase 2 Customer-Focused Tool Definitions
+            {
+              name: "create_customer_validated",
+              description: "Create a new customer with comprehensive validation (email format, phone validation, duplicate checking)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  first_name: {
+                    type: "string",
+                    description: "Customer's first name",
+                  },
+                  last_name: {
+                    type: "string",
+                    description: "Customer's last name",
+                  },
+                  email: {
+                    type: "string",
+                    description: "Customer's email address (validated format)",
+                  },
+                  phone: {
+                    type: "string",
+                    description: "Customer's phone number (minimum 10 digits)",
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Optional notes about the customer",
+                  },
+                },
+                required: ["first_name", "last_name", "email", "phone"],
+              },
+            },
+            {
+              name: "update_customer_profile",
+              description: "Update customer profile with validation (email format, phone validation, duplicate checking)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID to update",
+                  },
+                  first_name: {
+                    type: "string",
+                    description: "Customer's first name",
+                  },
+                  last_name: {
+                    type: "string",
+                    description: "Customer's last name",
+                  },
+                  email: {
+                    type: "string",
+                    description: "Customer's email address (validated format)",
+                  },
+                  phone: {
+                    type: "string",
+                    description: "Customer's phone number (minimum 10 digits)",
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Optional notes about the customer",
+                  },
+                },
+                required: ["customer_id", "first_name", "last_name", "email", "phone"],
+              },
+            },
+            {
+              name: "get_customer_preferences",
+              description: "Get customer preferences based on booking history (preferred services, staff, time slots)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID to get preferences for",
+                  },
+                },
+                required: ["customer_id"],
+              },
+            },
+            {
+              name: "get_customer_statistics",
+              description: "Get comprehensive customer statistics (appointments, spending, loyalty metrics)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID to get statistics for",
+                  },
+                },
+                required: ["customer_id"],
+              },
+            },
+            {
+              name: "create_booking_validated",
+              description: "Create a booking with comprehensive validation (conflict checking, availability verification)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID",
+                  },
+                  service_id: {
+                    type: "string",
+                    description: "The service ID",
+                  },
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID",
+                  },
+                  start_time: {
+                    type: "string",
+                    description: "Start time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Optional notes for the booking",
+                  },
+                },
+                required: ["customer_id", "service_id", "staff_id", "start_time"],
+              },
+            },
+            {
+              name: "get_booking_confirmation",
+              description: "Get detailed booking confirmation with all relevant information",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID to get confirmation for",
+                  },
+                },
+                required: ["appointment_id"],
+              },
+            },
+            {
+              name: "get_available_booking_slots",
+              description: "Get available booking slots for a service on a specific date",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  service_id: {
+                    type: "string",
+                    description: "The service ID to check availability for",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check (YYYY-MM-DD format)",
+                  },
+                  staff_id: {
+                    type: "string",
+                    description: "Optional: filter by specific staff member",
+                  },
+                },
+                required: ["service_id", "date"],
+              },
+            },
+            // Additional Customer-Focused Service Discovery Tool Definitions
+            {
+              name: "get_services_by_price_range",
+              description: "Get services filtered by price range (useful for customers with budget constraints)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  min_price_cents: {
+                    type: "number",
+                    description: "Minimum price in cents (optional, default 0)",
+                  },
+                  max_price_cents: {
+                    type: "number",
+                    description: "Maximum price in cents (optional, no upper limit if not specified)",
+                  },
+                },
+                required: [],
+              },
+            },
+            {
+              name: "get_services_by_duration",
+              description: "Get services filtered by duration range (useful for customers with time constraints)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  min_duration_minutes: {
+                    type: "number",
+                    description: "Minimum duration in minutes (optional, default 0)",
+                  },
+                  max_duration_minutes: {
+                    type: "number",
+                    description: "Maximum duration in minutes (optional, no upper limit if not specified)",
+                  },
+                },
+                required: [],
+              },
+            },
+            {
+              name: "get_services_by_staff",
+              description: "Get all services provided by a specific staff member",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID to get services for",
+                  },
+                },
+                required: ["staff_id"],
+              },
+            },
+            {
+              name: "get_services_by_time_availability",
+              description: "Get services that are available at a specific date and time",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  date: {
+                    type: "string",
+                    description: "The date to check availability (YYYY-MM-DD format)",
+                  },
+                  time: {
+                    type: "string",
+                    description: "The specific time to check (optional, HH:MM format)",
+                  },
+                },
+                required: ["date"],
+              },
+            },
+            {
+              name: "get_popular_services",
+              description: "Get the most popular services based on booking count and ratings",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  limit_count: {
+                    type: "number",
+                    description: "Maximum number of services to return (optional, default 10, max 50)",
+                  },
+                },
+                required: [],
               },
             },
     ],
