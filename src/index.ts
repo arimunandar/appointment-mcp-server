@@ -1977,9 +1977,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const slotsList = timeSlots
-          .map((slot: any) => 
-            `Staff: ${slot.first_name} ${slot.last_name}\nService: ${slot.service_name}\nTime: ${slot.slot_start_time} - ${slot.slot_end_time}\nDuration: ${slot.duration_minutes} minutes\nStatus: ${slot.availability_status}\nExisting Appointments: ${slot.existing_appointments}/${slot.max_bookings_per_slot}\n---`
-          )
+          .map((slot: any) => {
+            const staffList = slot.available_staff.map((staff: any) => staff.name).join(', ');
+            return `Time: ${slot.start_time} - ${slot.end_time}\nAvailable Staff: ${staffList}\nAvailable Slots: ${slot.available_slots}\n---`;
+          })
           .join("\n");
 
         return {

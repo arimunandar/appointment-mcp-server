@@ -693,7 +693,7 @@ export async function getAvailableTimeSlots(service_id: string, date: string) {
 
     // Get business hours for this day
     const businessHoursResult = await query(
-      'SELECT open_time, close_time FROM working_hours WHERE business_id = $1 AND day_of_week = $2 AND is_open = true',
+      'SELECT open_time, close_time FROM working_hours WHERE business_id = $1 AND day_of_week = $2 AND (is_closed = false OR is_closed IS NULL)',
       [BUSINESS_ID, dayOfWeek]
     );
 
