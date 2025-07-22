@@ -845,3 +845,239 @@ export async function getStaffTimeOff(business_id: string, start_date?: string, 
     throw new Error(`Failed to get staff time off: ${error.message}`);
   }
 }
+
+/**
+ * Check if a service is available on a specific date and time
+ */
+export async function checkServiceAvailability(business_id: string, service_name: string, date: string, time?: string) {
+  try {
+    const dayOfWeek = new Date(date).getDay();
+    
+    // First, find the service by name
+    const serviceResult = await query(
+      'SELECT id, name, duration_minutes, buffer_time_minutes, max_bookings_per_slot FROM services WHERE LOWER(name) LIKE LOWER($1) AND business_id = $2 AND is_active = true',
+      [`%${service_name}%`, business_id]
+    );
+
+    if (serviceResult.rows.length === 0) {
+      return {
+        available: false,
+        reason: `Service "${service_name}" not found or not active`,
+        service: null,
+        staff: []
+      };
+    }
+
+    const service = serviceResult.rows[0];
+
+    // Get staff who provide this service and are available on this day
+    const staffResult = await query(
+      `SELECT 
+        s.id as staff_id,
+        s.first_name,
+        s.last_name,
+        s.email,
+        swh.open_time,
+        swh.close_time,
+        swh.is_available,
+        -- Check if staff has time off on this date
+        CASE 
+          WHEN sto.date = $3::date THEN true
+          ELSE false
+        END as has_time_off,
+        sto.title as time_off_title,
+        sto.is_all_day as time_off_all_day
+      FROM staff s
+      JOIN staff_services ss ON s.id = ss.staff_id AND ss.service_id = $2
+      LEFT JOIN staff_working_hours swh ON s.id = swh.staff_id 
+        AND swh.day_of_week = $4
+      LEFT JOIN staff_time_off sto ON s.id = sto.staff_id 
+        AND sto.date = $3::date
+      WHERE s.business_id = $1
+        AND s.is_active = true
+        AND swh.is_available = true
+        AND (sto.id IS NULL OR sto.is_all_day = false)
+      ORDER BY s.first_name, s.last_name`,
+      [business_id, service.id, date, dayOfWeek]
+    );
+
+    if (staffResult.rows.length === 0) {
+      return {
+        available: false,
+        reason: `No staff available for ${service.name} on ${date}`,
+        service: service,
+        staff: []
+      };
+    }
+
+    // If specific time is requested, check if it's within working hours
+    let availableStaff = staffResult.rows;
+    if (time) {
+      availableStaff = staffResult.rows.filter((staff: any) => {
+        if (staff.has_time_off) return false;
+        if (!staff.open_time || !staff.close_time) return false;
+        
+        const requestedTime = new Date(`2000-01-01T${time}`);
+        const openTime = new Date(`2000-01-01T${staff.open_time}`);
+        const closeTime = new Date(`2000-01-01T${staff.close_time}`);
+        
+        return requestedTime >= openTime && requestedTime < closeTime;
+      });
+
+      if (availableStaff.length === 0) {
+        return {
+          available: false,
+          reason: `No staff available for ${service.name} at ${time} on ${date}`,
+          service: service,
+          staff: staffResult.rows
+        };
+      }
+    }
+
+    // Check existing appointments for this service and date
+    const appointmentsResult = await query(
+      `SELECT staff_id, COUNT(*) as appointment_count
+       FROM appointments
+       WHERE business_id = $1 
+         AND service_id = $2
+         AND DATE(start_time) = $3::date
+         AND status IN ('confirmed', 'pending', 'scheduled')
+       GROUP BY staff_id`,
+      [business_id, service.id, date]
+    );
+
+    const appointmentCounts = new Map();
+    appointmentsResult.rows.forEach((row: any) => {
+      appointmentCounts.set(row.staff_id, parseInt(row.appointment_count));
+    });
+
+    // Filter staff based on booking capacity
+    const fullyBookedStaff = availableStaff.filter((staff: any) => {
+      const existingAppointments = appointmentCounts.get(staff.staff_id) || 0;
+      return existingAppointments >= service.max_bookings_per_slot;
+    });
+
+    const availableStaffWithCapacity = availableStaff.filter((staff: any) => {
+      const existingAppointments = appointmentCounts.get(staff.staff_id) || 0;
+      return existingAppointments < service.max_bookings_per_slot;
+    });
+
+    return {
+      available: availableStaffWithCapacity.length > 0,
+      reason: availableStaffWithCapacity.length > 0 
+        ? `${service.name} is available on ${date}` 
+        : `All staff are fully booked for ${service.name} on ${date}`,
+      service: service,
+      staff: availableStaffWithCapacity,
+      fullyBookedStaff: fullyBookedStaff,
+      totalStaff: staffResult.rows
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to check service availability: ${error.message}`);
+  }
+}
+
+/**
+ * Get available time slots for a service on a specific date
+ */
+export async function getServiceTimeSlots(business_id: string, service_name: string, date: string) {
+  try {
+    const availability = await checkServiceAvailability(business_id, service_name, date);
+    
+    if (!availability.available) {
+      return {
+        available: false,
+        reason: availability.reason,
+        timeSlots: []
+      };
+    }
+
+    const service = availability.service;
+    const availableStaff = availability.staff;
+    const timeSlots: any[] = [];
+
+    // Generate time slots for each available staff member
+    for (const staff of availableStaff) {
+      if (!staff.open_time || !staff.close_time) continue;
+
+      const startTime = new Date(`2000-01-01T${staff.open_time}`);
+      const endTime = new Date(`2000-01-01T${staff.close_time}`);
+      const slotDuration = service.duration_minutes + service.buffer_time_minutes;
+
+      let currentTime = new Date(startTime);
+      while (currentTime < endTime) {
+        const slotEnd = new Date(currentTime.getTime() + service.duration_minutes * 60000);
+        
+        if (slotEnd <= endTime) {
+          timeSlots.push({
+            staff_id: staff.staff_id,
+            staff_name: `${staff.first_name} ${staff.last_name}`,
+            service_id: service.id,
+            service_name: service.name,
+            duration_minutes: service.duration_minutes,
+            start_time: currentTime.toTimeString().slice(0, 8),
+            end_time: slotEnd.toTimeString().slice(0, 8),
+            date: date
+          });
+        }
+        
+        currentTime = new Date(currentTime.getTime() + 30 * 60000); // Add 30 minutes
+      }
+    }
+
+    return {
+      available: true,
+      reason: `${service.name} is available on ${date}`,
+      timeSlots: timeSlots,
+      service: service
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to get service time slots: ${error.message}`);
+  }
+}
+
+/**
+ * Check business hours for a specific date
+ */
+export async function checkBusinessHours(business_id: string, date: string) {
+  try {
+    const dayOfWeek = new Date(date).getDay();
+    
+    const result = await query(
+      `SELECT 
+        day_of_week,
+        open_time,
+        close_time,
+        is_closed
+      FROM working_hours
+      WHERE business_id = $1 AND day_of_week = $2`,
+      [business_id, dayOfWeek]
+    );
+
+    if (result.rows.length === 0) {
+      return {
+        isOpen: false,
+        reason: `No business hours set for this day`,
+        hours: null
+      };
+    }
+
+    const hours = result.rows[0];
+    
+    if (hours.is_closed) {
+      return {
+        isOpen: false,
+        reason: `Business is closed on ${date}`,
+        hours: hours
+      };
+    }
+
+    return {
+      isOpen: true,
+      reason: `Business is open from ${hours.open_time} to ${hours.close_time} on ${date}`,
+      hours: hours
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to check business hours: ${error.message}`);
+  }
+}

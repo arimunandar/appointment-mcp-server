@@ -31,7 +31,10 @@ import {
   getAvailableTimeSlots,
   getAllStaffInfo,
   getStaffMember,
-  getStaffTimeOff
+  getStaffTimeOff,
+  checkServiceAvailability,
+  getServiceTimeSlots,
+  checkBusinessHours
 } from "./database.js";
 
 // Get BUSINESS_ID from environment variables
@@ -54,7 +57,7 @@ function getBusinessId(providedBusinessId?: string): string {
 const server = new Server(
   {
     name: "appointment-mcp-server",
-    version: "1.4.0",
+    version: "1.5.0",
   },
   {
     capabilities: {
@@ -1089,6 +1092,195 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    // New Availability Checking Tools
+    case "check_service_availability": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        service_name: z.string().min(1, "Service name is required"),
+        date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
+        time: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { service_name, date, time } = parsedArgs;
+        
+        if (!isValidDate(date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        const availability = await checkServiceAvailability(business_id, service_name, date, time);
+        
+        if (!availability.available) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `❌ ${availability.reason}`,
+              },
+            ],
+          };
+        }
+
+        const staffList = availability.staff
+          .map((staff: any) => 
+            `• ${staff.first_name} ${staff.last_name} (${staff.open_time} - ${staff.close_time})`
+          )
+          .join("\n");
+
+        const timeInfo = time ? ` at ${time}` : "";
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ ${availability.reason}${timeInfo}\n\nAvailable Staff:\n${staffList}\n\nService: ${availability.service.name}\nDuration: ${availability.service.duration_minutes} minutes`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error checking service availability: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_service_time_slots": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        service_name: z.string().min(1, "Service name is required"),
+        date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { service_name, date } = parsedArgs;
+        
+        if (!isValidDate(date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        const result = await getServiceTimeSlots(business_id, service_name, date);
+        
+        if (!result.available) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `❌ ${result.reason}`,
+              },
+            ],
+          };
+        }
+
+        const slotsList = result.timeSlots
+          .map((slot: any) => 
+            `• ${slot.start_time} - ${slot.end_time} (${slot.staff_name})`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ ${result.reason}\n\nAvailable Time Slots:\n${slotsList}\n\nService: ${result.service.name}\nDuration: ${result.service.duration_minutes} minutes`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting service time slots: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "check_business_hours": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { date } = parsedArgs;
+        
+        if (!isValidDate(date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        const hours = await checkBusinessHours(business_id, date);
+        
+        if (!hours.isOpen) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `❌ ${hours.reason}`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ ${hours.reason}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error checking business hours: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       return {
         content: [
@@ -1570,6 +1762,72 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                 },
                 required: [],
+              },
+            },
+            {
+              name: "check_service_availability",
+              description: "Check if a service is available on a specific date and time",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  service_name: {
+                    type: "string",
+                    description: "The name of the service",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check availability (YYYY-MM-DD format)",
+                  },
+                  time: {
+                    type: "string",
+                    description: "The specific time to check (optional, HH:MM format)",
+                  },
+                },
+                required: ["business_id", "service_name", "date"],
+              },
+            },
+            {
+              name: "get_service_time_slots",
+              description: "Get available time slots for a specific service on a date",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  service_name: {
+                    type: "string",
+                    description: "The name of the service",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check availability (YYYY-MM-DD format)",
+                  },
+                },
+                required: ["business_id", "service_name", "date"],
+              },
+            },
+            {
+              name: "check_business_hours",
+              description: "Check if the business is open on a specific date",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check business hours (YYYY-MM-DD format)",
+                  },
+                },
+                required: ["business_id", "date"],
               },
             },
     ],
