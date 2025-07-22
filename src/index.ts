@@ -1879,7 +1879,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "The specific time to check (optional, HH:MM format)",
                   },
                 },
-                required: ["business_id", "service_name", "date"],
+                required: ["service_name", "date"],
               },
             },
             {
@@ -1901,7 +1901,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "The date to check availability (YYYY-MM-DD format)",
                   },
                 },
-                required: ["business_id", "service_name", "date"],
+                required: ["service_name", "date"],
               },
             },
             {
@@ -1919,7 +1919,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     description: "The date to check business hours (YYYY-MM-DD format)",
                   },
                 },
-                required: ["business_id", "date"],
+                required: ["date"],
               },
             },
             {
