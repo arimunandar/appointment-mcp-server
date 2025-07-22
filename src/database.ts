@@ -1113,3 +1113,336 @@ export async function checkBusinessHours(business_id: string, date: string) {
     throw new Error(`Failed to check business hours: ${error.message}`);
   }
 }
+
+/**
+ * Check for appointment conflicts comprehensively
+ */
+export async function checkAppointmentConflict(
+  business_id: string,
+  service_id: string,
+  staff_id: string,
+  customer_id: string,
+  start_time: string,
+  end_time: string,
+  appointment_id?: string // Optional: exclude current appointment when updating
+) {
+  try {
+    const startDate = new Date(start_time);
+    const endDate = new Date(end_time);
+    const dayOfWeek = startDate.getDay();
+    const dateOnly = startDate.toISOString().split('T')[0];
+    const startTimeOnly = startDate.toTimeString().slice(0, 8);
+    const endTimeOnly = endDate.toTimeString().slice(0, 8);
+
+    const conflicts: any[] = [];
+
+    // 1. Check if the service exists and is active
+    const serviceResult = await query(
+      'SELECT id, name, duration_minutes, max_bookings_per_slot, is_active FROM services WHERE id = $1 AND business_id = $2',
+      [service_id, business_id]
+    );
+
+    if (serviceResult.rows.length === 0) {
+      conflicts.push({
+        type: 'SERVICE_NOT_FOUND',
+        severity: 'ERROR',
+        message: 'Service not found or does not belong to this business'
+      });
+      return { hasConflicts: true, conflicts };
+    }
+
+    const service = serviceResult.rows[0];
+    if (!service.is_active) {
+      conflicts.push({
+        type: 'SERVICE_INACTIVE',
+        severity: 'ERROR',
+        message: `Service "${service.name}" is not active`
+      });
+    }
+
+    // 2. Check if staff exists and is active
+    const staffResult = await query(
+      'SELECT id, first_name, last_name, is_active FROM staff WHERE id = $1 AND business_id = $2',
+      [staff_id, business_id]
+    );
+
+    if (staffResult.rows.length === 0) {
+      conflicts.push({
+        type: 'STAFF_NOT_FOUND',
+        severity: 'ERROR',
+        message: 'Staff member not found or does not belong to this business'
+      });
+      return { hasConflicts: true, conflicts };
+    }
+
+    const staff = staffResult.rows[0];
+    if (!staff.is_active) {
+      conflicts.push({
+        type: 'STAFF_INACTIVE',
+        severity: 'ERROR',
+        message: `Staff member "${staff.first_name} ${staff.last_name}" is not active`
+      });
+    }
+
+    // 3. Check if customer exists
+    const customerResult = await query(
+      'SELECT id, first_name, last_name FROM customers WHERE id = $1 AND business_id = $2',
+      [customer_id, business_id]
+    );
+
+    if (customerResult.rows.length === 0) {
+      conflicts.push({
+        type: 'CUSTOMER_NOT_FOUND',
+        severity: 'ERROR',
+        message: 'Customer not found or does not belong to this business'
+      });
+      return { hasConflicts: true, conflicts };
+    }
+
+    // 4. Check if staff provides this service
+    const staffServiceResult = await query(
+      'SELECT id FROM staff_services WHERE staff_id = $1 AND service_id = $2',
+      [staff_id, service_id]
+    );
+
+    if (staffServiceResult.rows.length === 0) {
+      conflicts.push({
+        type: 'STAFF_SERVICE_MISMATCH',
+        severity: 'ERROR',
+        message: `Staff member "${staff.first_name} ${staff.last_name}" does not provide service "${service.name}"`
+      });
+    }
+
+    // 5. Check business hours
+    const businessHoursResult = await query(
+      'SELECT open_time, close_time, is_closed FROM working_hours WHERE business_id = $1 AND day_of_week = $2',
+      [business_id, dayOfWeek]
+    );
+
+    if (businessHoursResult.rows.length === 0) {
+      conflicts.push({
+        type: 'NO_BUSINESS_HOURS',
+        severity: 'ERROR',
+        message: `No business hours set for this day of week (${dayOfWeek})`
+      });
+    } else {
+      const hours = businessHoursResult.rows[0];
+      if (hours.is_closed) {
+        conflicts.push({
+          type: 'BUSINESS_CLOSED',
+          severity: 'ERROR',
+          message: 'Business is closed on this day'
+        });
+      } else if (startTimeOnly < hours.open_time || endTimeOnly > hours.close_time) {
+        conflicts.push({
+          type: 'OUTSIDE_BUSINESS_HOURS',
+          severity: 'ERROR',
+          message: `Appointment time (${startTimeOnly}-${endTimeOnly}) is outside business hours (${hours.open_time}-${hours.close_time})`
+        });
+      }
+    }
+
+    // 6. Check staff working hours
+    const staffHoursResult = await query(
+      'SELECT open_time, close_time, is_available FROM staff_working_hours WHERE staff_id = $1 AND day_of_week = $2',
+      [staff_id, dayOfWeek]
+    );
+
+    if (staffHoursResult.rows.length === 0) {
+      conflicts.push({
+        type: 'STAFF_NO_WORKING_HOURS',
+        severity: 'ERROR',
+        message: `Staff member "${staff.first_name} ${staff.last_name}" does not work on this day`
+      });
+    } else {
+      const staffHours = staffHoursResult.rows[0];
+      if (!staffHours.is_available) {
+        conflicts.push({
+          type: 'STAFF_NOT_AVAILABLE',
+          severity: 'ERROR',
+          message: `Staff member "${staff.first_name} ${staff.last_name}" is not available on this day`
+        });
+      } else if (startTimeOnly < staffHours.open_time || endTimeOnly > staffHours.close_time) {
+        conflicts.push({
+          type: 'OUTSIDE_STAFF_HOURS',
+          severity: 'ERROR',
+          message: `Appointment time (${startTimeOnly}-${endTimeOnly}) is outside staff hours (${staffHours.open_time}-${staffHours.close_time})`
+        });
+      }
+    }
+
+    // 7. Check staff time off
+    const timeOffResult = await query(
+      'SELECT title, is_all_day, start_time, end_time FROM staff_time_off WHERE staff_id = $1 AND date = $2::date',
+      [staff_id, dateOnly]
+    );
+
+    if (timeOffResult.rows.length > 0) {
+      const timeOff = timeOffResult.rows[0];
+      if (timeOff.is_all_day) {
+        conflicts.push({
+          type: 'STAFF_TIME_OFF_ALL_DAY',
+          severity: 'ERROR',
+          message: `Staff member "${staff.first_name} ${staff.last_name}" has all-day time off: "${timeOff.title}"`
+        });
+      } else if (timeOff.start_time && timeOff.end_time) {
+        // Check for partial time off overlap
+        if (
+          (startTimeOnly >= timeOff.start_time && startTimeOnly < timeOff.end_time) ||
+          (endTimeOnly > timeOff.start_time && endTimeOnly <= timeOff.end_time) ||
+          (startTimeOnly <= timeOff.start_time && endTimeOnly >= timeOff.end_time)
+        ) {
+          conflicts.push({
+            type: 'STAFF_TIME_OFF_OVERLAP',
+            severity: 'ERROR',
+            message: `Appointment overlaps with staff time off: "${timeOff.title}" (${timeOff.start_time}-${timeOff.end_time})`
+          });
+        }
+      }
+    }
+
+    // 8. Check for double-booking (staff conflicts)
+    let staffConflictQuery = `
+      SELECT 
+        a.id,
+        a.start_time,
+        a.end_time,
+        a.status,
+        c.first_name as customer_first_name,
+        c.last_name as customer_last_name,
+        sv.name as service_name
+      FROM appointments a
+      JOIN customers c ON a.customer_id = c.id
+      JOIN services sv ON a.service_id = sv.id
+      WHERE a.staff_id = $1
+        AND a.business_id = $2
+        AND a.status IN ('confirmed', 'pending', 'scheduled')
+        AND (
+          (a.start_time >= $3 AND a.start_time < $4) OR
+          (a.end_time > $3 AND a.end_time <= $4) OR
+          (a.start_time <= $3 AND a.end_time >= $4)
+        )`;
+
+    const staffConflictParams = [staff_id, business_id, start_time, end_time];
+    
+    if (appointment_id) {
+      staffConflictQuery += ' AND a.id != $5';
+      staffConflictParams.push(appointment_id);
+    }
+
+    const staffConflictResult = await query(staffConflictQuery, staffConflictParams);
+
+    if (staffConflictResult.rows.length > 0) {
+      const conflict = staffConflictResult.rows[0];
+      conflicts.push({
+        type: 'STAFF_DOUBLE_BOOKING',
+        severity: 'ERROR',
+        message: `Staff member "${staff.first_name} ${staff.last_name}" is already booked for ${conflict.service_name} with ${conflict.customer_first_name} ${conflict.customer_last_name} (${conflict.start_time}-${conflict.end_time})`,
+        conflictingAppointment: conflict
+      });
+    }
+
+    // 9. Check for customer double-booking
+    let customerConflictQuery = `
+      SELECT 
+        a.id,
+        a.start_time,
+        a.end_time,
+        a.status,
+        s.first_name as staff_first_name,
+        s.last_name as staff_last_name,
+        sv.name as service_name
+      FROM appointments a
+      JOIN staff s ON a.staff_id = s.id
+      JOIN services sv ON a.service_id = sv.id
+      WHERE a.customer_id = $1
+        AND a.business_id = $2
+        AND a.status IN ('confirmed', 'pending', 'scheduled')
+        AND (
+          (a.start_time >= $3 AND a.start_time < $4) OR
+          (a.end_time > $3 AND a.end_time <= $4) OR
+          (a.start_time <= $3 AND a.end_time >= $4)
+        )`;
+
+    const customerConflictParams = [customer_id, business_id, start_time, end_time];
+    
+    if (appointment_id) {
+      customerConflictQuery += ' AND a.id != $5';
+      customerConflictParams.push(appointment_id);
+    }
+
+    const customerConflictResult = await query(customerConflictQuery, customerConflictParams);
+
+    if (customerConflictResult.rows.length > 0) {
+      const conflict = customerConflictResult.rows[0];
+      conflicts.push({
+        type: 'CUSTOMER_DOUBLE_BOOKING',
+        severity: 'ERROR',
+        message: `Customer "${customerResult.rows[0].first_name} ${customerResult.rows[0].last_name}" is already booked for ${conflict.service_name} with ${conflict.staff_first_name} ${conflict.staff_last_name} (${conflict.start_time}-${conflict.end_time})`,
+        conflictingAppointment: conflict
+      });
+    }
+
+    // 10. Check service booking capacity
+    let serviceConflictQuery = `
+      SELECT COUNT(*) as appointment_count
+      FROM appointments
+      WHERE business_id = $1
+        AND service_id = $2
+        AND DATE(start_time) = $3::date
+        AND status IN ('confirmed', 'pending', 'scheduled')
+        AND (
+          (start_time >= $4 AND start_time < $5) OR
+          (end_time > $4 AND end_time <= $5) OR
+          (start_time <= $4 AND end_time >= $5)
+        )`;
+
+    const serviceConflictParams = [business_id, service_id, dateOnly, start_time, end_time];
+    
+    if (appointment_id) {
+      serviceConflictQuery += ' AND id != $6';
+      serviceConflictParams.push(appointment_id);
+    }
+
+    const serviceConflictResult = await query(serviceConflictQuery, serviceConflictParams);
+    const existingAppointments = parseInt(serviceConflictResult.rows[0].appointment_count);
+
+    if (existingAppointments >= service.max_bookings_per_slot) {
+      conflicts.push({
+        type: 'SERVICE_CAPACITY_EXCEEDED',
+        severity: 'ERROR',
+        message: `Service "${service.name}" has reached maximum booking capacity (${service.max_bookings_per_slot} slots) for this time slot`
+      });
+    }
+
+    // 11. Check for logical time issues
+    if (startDate >= endDate) {
+      conflicts.push({
+        type: 'INVALID_TIME_RANGE',
+        severity: 'ERROR',
+        message: 'Start time must be before end time'
+      });
+    }
+
+    if (startDate < new Date()) {
+      conflicts.push({
+        type: 'PAST_DATE',
+        severity: 'WARNING',
+        message: 'Appointment is scheduled in the past'
+      });
+    }
+
+    return {
+      hasConflicts: conflicts.length > 0,
+      conflicts: conflicts,
+      summary: {
+        totalConflicts: conflicts.length,
+        errorCount: conflicts.filter(c => c.severity === 'ERROR').length,
+        warningCount: conflicts.filter(c => c.severity === 'WARNING').length,
+        canProceed: conflicts.filter(c => c.severity === 'ERROR').length === 0
+      }
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to check appointment conflicts: ${error.message}`);
+  }
+}

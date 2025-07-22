@@ -34,7 +34,8 @@ import {
   getStaffTimeOff,
   checkServiceAvailability,
   getServiceTimeSlots,
-  checkBusinessHours
+  checkBusinessHours,
+  checkAppointmentConflict
 } from "./database.js";
 
 // Get BUSINESS_ID from environment variables
@@ -57,7 +58,7 @@ function getBusinessId(providedBusinessId?: string): string {
 const server = new Server(
   {
     name: "appointment-mcp-server",
-    version: "1.6.0",
+    version: "1.7.0",
   },
   {
     capabilities: {
@@ -1282,6 +1283,96 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    case "check_appointment_conflict": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        service_id: z.string().min(1, "Service ID is required"),
+        staff_id: z.string().min(1, "Staff ID is required"),
+        customer_id: z.string().min(1, "Customer ID is required"),
+        start_time: z.string().min(1, "Start time is required (ISO format)"),
+        end_time: z.string().min(1, "End time is required (ISO format)"),
+        appointment_id: z.string().optional(), // Optional: exclude current appointment when updating
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { service_id, staff_id, customer_id, start_time, end_time, appointment_id } = parsedArgs;
+        
+        // Validate ISO datetime format
+        if (!isValidDate(start_time.split('T')[0]) || !isValidDate(end_time.split('T')[0])) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid date format. Please use ISO format (YYYY-MM-DDTHH:MM:SS).",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const result = await checkAppointmentConflict(business_id, service_id, staff_id, customer_id, start_time, end_time, appointment_id);
+
+        if (result.hasConflicts) {
+          const errorConflicts = result.conflicts.filter((c: any) => c.severity === 'ERROR');
+          const warningConflicts = result.conflicts.filter((c: any) => c.severity === 'WARNING');
+          
+          let responseText = `❌ Appointment conflicts detected!\n\n`;
+          
+          if (errorConflicts.length > 0) {
+            responseText += `🚨 ERRORS (${errorConflicts.length}):\n`;
+            errorConflicts.forEach((conflict: any, index: number) => {
+              responseText += `${index + 1}. ${conflict.message}\n`;
+            });
+            responseText += '\n';
+          }
+          
+          if (warningConflicts.length > 0) {
+            responseText += `⚠️ WARNINGS (${warningConflicts.length}):\n`;
+            warningConflicts.forEach((conflict: any, index: number) => {
+              responseText += `${index + 1}. ${conflict.message}\n`;
+            });
+            responseText += '\n';
+          }
+          
+          responseText += `📊 Summary:\n`;
+          responseText += `• Total Conflicts: ${result.summary?.totalConflicts || 0}\n`;
+          responseText += `• Errors: ${result.summary?.errorCount || 0}\n`;
+          responseText += `• Warnings: ${result.summary?.warningCount || 0}\n`;
+          responseText += `• Can Proceed: ${result.summary?.canProceed ? 'Yes' : 'No'}`;
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: responseText,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `✅ No conflicts detected! The appointment is available.\n\n📊 Summary:\n• Total Conflicts: 0\n• Errors: 0\n• Warnings: 0\n• Can Proceed: Yes`,
+              },
+            ],
+          };
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error checking appointment conflicts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       return {
         content: [
@@ -1829,6 +1920,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                 },
                 required: ["business_id", "date"],
+              },
+            },
+            {
+              name: "check_appointment_conflict",
+              description: "Comprehensive appointment conflict checking for double-booking, staff availability, business hours, and more",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  service_id: {
+                    type: "string",
+                    description: "The service ID",
+                  },
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID",
+                  },
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID",
+                  },
+                  start_time: {
+                    type: "string",
+                    description: "The appointment start time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  end_time: {
+                    type: "string",
+                    description: "The appointment end time (ISO format: YYYY-MM-DDTHH:MM:SS)",
+                  },
+                  appointment_id: {
+                    type: "string",
+                    description: "Optional: exclude current appointment when updating existing appointment",
+                  },
+                },
+                required: ["service_id", "staff_id", "customer_id", "start_time", "end_time"],
               },
             },
     ],
