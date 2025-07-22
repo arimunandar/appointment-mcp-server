@@ -533,3 +533,315 @@ process.on('SIGTERM', async () => {
   await pool.end();
   process.exit(0);
 });
+
+// Availability and Staff Management Functions
+
+/**
+ * Get staff availability for a specific date
+ */
+export async function getStaffAvailability(business_id: string, date: string) {
+  try {
+    const dayOfWeek = new Date(date).getDay();
+    
+    const result = await query(
+      `SELECT 
+        s.id as staff_id,
+        s.first_name,
+        s.last_name,
+        s.email,
+        s.phone_number,
+        s.avatar_url,
+        s.bio,
+        s.is_active,
+        swh.day_of_week,
+        swh.open_time,
+        swh.close_time,
+        swh.is_available,
+        -- Check if staff has time off on this date
+        CASE 
+          WHEN sto.date = $2::date THEN true
+          ELSE false
+        END as has_time_off,
+        sto.title as time_off_title,
+        sto.description as time_off_description,
+        sto.is_all_day as time_off_all_day,
+        sto.start_time as time_off_start,
+        sto.end_time as time_off_end
+      FROM staff s
+      LEFT JOIN staff_working_hours swh ON s.id = swh.staff_id 
+        AND swh.day_of_week = $3
+      LEFT JOIN staff_time_off sto ON s.id = sto.staff_id 
+        AND sto.date = $2::date
+      WHERE s.business_id = $1
+        AND s.is_active = true
+      ORDER BY s.first_name, s.last_name`,
+      [business_id, date, dayOfWeek]
+    );
+
+    return result.rows;
+  } catch (error: any) {
+    throw new Error(`Failed to get staff availability: ${error.message}`);
+  }
+}
+
+/**
+ * Get available time slots for a specific service and date
+ */
+export async function getAvailableTimeSlots(business_id: string, service_id: string, date: string) {
+  try {
+    const dayOfWeek = new Date(date).getDay();
+    
+    // First get the service details
+    const serviceResult = await query(
+      'SELECT id, name, duration_minutes, buffer_time_minutes, max_bookings_per_slot FROM services WHERE id = $1 AND business_id = $2',
+      [service_id, business_id]
+    );
+
+    if (serviceResult.rows.length === 0) {
+      throw new Error(`Service not found: ${service_id}`);
+    }
+
+    const service = serviceResult.rows[0];
+
+    // Get staff who provide this service and their working hours
+    const staffResult = await query(
+      `SELECT 
+        s.id as staff_id,
+        s.first_name,
+        s.last_name,
+        swh.open_time,
+        swh.close_time,
+        swh.is_available
+      FROM staff s
+      JOIN staff_working_hours swh ON s.id = swh.staff_id 
+        AND swh.day_of_week = $3
+      JOIN staff_services ss ON s.id = ss.staff_id AND ss.service_id = $2
+      WHERE s.business_id = $1
+        AND s.is_active = true
+        AND swh.is_available = true`,
+      [business_id, service_id, dayOfWeek]
+    );
+
+    // Get existing appointments for this date
+    const appointmentsResult = await query(
+      `SELECT staff_id, COUNT(*) as appointment_count
+       FROM appointments
+       WHERE business_id = $1 
+         AND service_id = $2
+         AND DATE(start_time) = $3::date
+         AND status IN ('confirmed', 'pending')
+       GROUP BY staff_id`,
+      [business_id, service_id, date]
+    );
+
+    const appointmentCounts = new Map();
+    appointmentsResult.rows.forEach((row: any) => {
+      appointmentCounts.set(row.staff_id, parseInt(row.appointment_count));
+    });
+
+    // Generate time slots for each staff member
+    const timeSlots: any[] = [];
+    
+    for (const staff of staffResult.rows) {
+      const existingAppointments = appointmentCounts.get(staff.staff_id) || 0;
+      
+      // Generate 30-minute slots
+      const startTime = new Date(`2000-01-01T${staff.open_time}`);
+      const endTime = new Date(`2000-01-01T${staff.close_time}`);
+      const slotDuration = service.duration_minutes + service.buffer_time_minutes;
+      
+      let currentTime = new Date(startTime);
+      while (currentTime < endTime) {
+        const slotEnd = new Date(currentTime.getTime() + service.duration_minutes * 60000);
+        
+        if (slotEnd <= endTime) {
+          timeSlots.push({
+            staff_id: staff.staff_id,
+            first_name: staff.first_name,
+            last_name: staff.last_name,
+            service_id: service_id,
+            service_name: service.name,
+            duration_minutes: service.duration_minutes,
+            slot_start_time: currentTime.toTimeString().slice(0, 8),
+            slot_end_time: slotEnd.toTimeString().slice(0, 8),
+            existing_appointments: existingAppointments,
+            max_bookings_per_slot: service.max_bookings_per_slot,
+            availability_status: existingAppointments < service.max_bookings_per_slot ? 'available' : 'fully_booked'
+          });
+        }
+        
+        currentTime = new Date(currentTime.getTime() + 30 * 60000); // Add 30 minutes
+      }
+    }
+
+    return timeSlots;
+  } catch (error: any) {
+    throw new Error(`Failed to get available time slots: ${error.message}`);
+  }
+}
+
+/**
+ * Get all staff information with their services and working hours
+ */
+export async function getAllStaffInfo(business_id: string) {
+  try {
+    const result = await query(
+      `SELECT 
+        s.id as staff_id,
+        s.first_name,
+        s.last_name,
+        s.email,
+        s.phone_number,
+        s.avatar_url,
+        s.bio,
+        s.is_active,
+        -- Get services this staff member provides
+        STRING_AGG(DISTINCT sv.name, ', ' ORDER BY sv.name) as services_provided,
+        COUNT(DISTINCT ss.service_id) as total_services,
+        -- Get working hours summary
+        STRING_AGG(
+          DISTINCT 
+          CASE swh.day_of_week
+            WHEN 0 THEN 'Monday'
+            WHEN 1 THEN 'Tuesday' 
+            WHEN 2 THEN 'Wednesday'
+            WHEN 3 THEN 'Thursday'
+            WHEN 4 THEN 'Friday'
+            WHEN 5 THEN 'Saturday'
+            WHEN 6 THEN 'Sunday'
+          END || ': ' || swh.open_time || '-' || swh.close_time,
+          '; '
+        ) as working_hours_summary,
+        -- Get upcoming appointments count
+        COUNT(DISTINCT CASE WHEN a.status IN ('confirmed', 'pending') AND a.start_time > NOW() THEN a.id END) as upcoming_appointments,
+        -- Get completed appointments count
+        COUNT(DISTINCT CASE WHEN a.status = 'completed' THEN a.id END) as completed_appointments
+      FROM staff s
+      LEFT JOIN staff_services ss ON s.id = ss.staff_id
+      LEFT JOIN services sv ON ss.service_id = sv.id
+      LEFT JOIN staff_working_hours swh ON s.id = swh.staff_id AND swh.is_available = true
+      LEFT JOIN appointments a ON s.id = a.staff_id
+      WHERE s.business_id = $1
+      GROUP BY s.id, s.first_name, s.last_name, s.email, s.phone_number, s.avatar_url, s.bio, s.is_active
+      ORDER BY s.first_name, s.last_name`,
+      [business_id]
+    );
+
+    return result.rows;
+  } catch (error: any) {
+    throw new Error(`Failed to get staff information: ${error.message}`);
+  }
+}
+
+/**
+ * Get staff member by ID with detailed information
+ */
+export async function getStaffMember(business_id: string, staff_id: string) {
+  try {
+    const result = await query(
+      `SELECT 
+        s.id as staff_id,
+        s.first_name,
+        s.last_name,
+        s.email,
+        s.phone_number,
+        s.avatar_url,
+        s.bio,
+        s.is_active,
+        -- Get services this staff member provides
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', sv.id,
+            'name', sv.name,
+            'description', sv.description,
+            'duration_minutes', sv.duration_minutes,
+            'price_cents', sv.price_cents
+          )
+        ) FILTER (WHERE sv.id IS NOT NULL) as services,
+        -- Get working hours
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'day_of_week', swh.day_of_week,
+            'day_name', CASE swh.day_of_week
+              WHEN 0 THEN 'Monday'
+              WHEN 1 THEN 'Tuesday' 
+              WHEN 2 THEN 'Wednesday'
+              WHEN 3 THEN 'Thursday'
+              WHEN 4 THEN 'Friday'
+              WHEN 5 THEN 'Saturday'
+              WHEN 6 THEN 'Sunday'
+            END,
+            'open_time', swh.open_time,
+            'close_time', swh.close_time,
+            'is_available', swh.is_available
+          )
+        ) FILTER (WHERE swh.id IS NOT NULL) as working_hours,
+        -- Get upcoming appointments
+        COUNT(DISTINCT CASE WHEN a.status IN ('confirmed', 'pending') AND a.start_time > NOW() THEN a.id END) as upcoming_appointments,
+        -- Get completed appointments count
+        COUNT(DISTINCT CASE WHEN a.status = 'completed' THEN a.id END) as completed_appointments
+      FROM staff s
+      LEFT JOIN staff_services ss ON s.id = ss.staff_id
+      LEFT JOIN services sv ON ss.service_id = sv.id
+      LEFT JOIN staff_working_hours swh ON s.id = swh.staff_id
+      LEFT JOIN appointments a ON s.id = a.staff_id
+      WHERE s.business_id = $1 AND s.id = $2
+      GROUP BY s.id, s.first_name, s.last_name, s.email, s.phone_number, s.avatar_url, s.bio, s.is_active`,
+      [business_id, staff_id]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error(`Staff member not found: ${staff_id}`);
+    }
+
+    return result.rows[0];
+  } catch (error: any) {
+    throw new Error(`Failed to get staff member: ${error.message}`);
+  }
+}
+
+/**
+ * Get staff time off for a specific date range
+ */
+export async function getStaffTimeOff(business_id: string, start_date?: string, end_date?: string) {
+  try {
+    let whereClause = 'WHERE sto.business_id = $1';
+    const params = [business_id];
+    let paramIndex = 2;
+
+    if (start_date) {
+      whereClause += ` AND sto.date >= $${paramIndex}`;
+      params.push(start_date);
+      paramIndex++;
+    }
+    if (end_date) {
+      whereClause += ` AND sto.date <= $${paramIndex}`;
+      params.push(end_date);
+      paramIndex++;
+    }
+
+    const result = await query(
+      `SELECT 
+        sto.id,
+        sto.staff_id,
+        s.first_name,
+        s.last_name,
+        sto.title,
+        sto.description,
+        sto.date,
+        sto.start_time,
+        sto.end_time,
+        sto.is_all_day,
+        sto.created_at
+      FROM staff_time_off sto
+      JOIN staff s ON sto.staff_id = s.id
+      ${whereClause}
+      ORDER BY sto.date ASC, sto.start_time ASC`,
+      params
+    );
+
+    return result.rows;
+  } catch (error: any) {
+    throw new Error(`Failed to get staff time off: ${error.message}`);
+  }
+}

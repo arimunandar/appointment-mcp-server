@@ -1,6 +1,6 @@
 {
   "name": "appointment-mcp-server",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "MCP Server for appointment management with PostgreSQL support",
   "type": "module",
   "main": "build/index.js",

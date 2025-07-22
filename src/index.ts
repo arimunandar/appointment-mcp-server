@@ -26,7 +26,12 @@ import {
   getBusinessHours,
   getStaff,
   getCustomerReviews,
-  createReview
+  createReview,
+  getStaffAvailability,
+  getAvailableTimeSlots,
+  getAllStaffInfo,
+  getStaffMember,
+  getStaffTimeOff
 } from "./database.js";
 
 // Get BUSINESS_ID from environment variables
@@ -49,7 +54,7 @@ function getBusinessId(providedBusinessId?: string): string {
 const server = new Server(
   {
     name: "appointment-mcp-server",
-    version: "1.3.0",
+    version: "1.4.0",
   },
   {
     capabilities: {
@@ -782,6 +787,308 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
+    // Availability and Staff Management Tools
+    case "get_staff_availability": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { date } = parsedArgs;
+        
+        if (!isValidDate(date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        const availability = await getStaffAvailability(business_id, date);
+        
+        if (!availability || availability.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No staff availability found for this date.",
+              },
+            ],
+          };
+        }
+
+        const availabilityList = availability
+          .map((staff: any) => {
+            const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const dayName = staff.day_of_week !== null ? dayNames[staff.day_of_week] : 'No schedule';
+            const workingHours = staff.open_time && staff.close_time ? `${staff.open_time} - ${staff.close_time}` : 'Not available';
+            const timeOffInfo = staff.has_time_off ? 
+              `\nTime Off: ${staff.time_off_title || 'Scheduled time off'}${staff.time_off_all_day ? ' (All day)' : staff.time_off_start ? ` (${staff.time_off_start} - ${staff.time_off_end})` : ''}` : '';
+            
+            return `Name: ${staff.first_name} ${staff.last_name}\nEmail: ${staff.email}\nPhone: ${staff.phone_number}\nDay: ${dayName}\nWorking Hours: ${workingHours}\nAvailable: ${staff.is_available ? 'Yes' : 'No'}${timeOffInfo}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Staff Availability for ${date}:\n\n${availabilityList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting staff availability: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_available_time_slots": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        service_id: z.string().min(1, "Service ID is required"),
+        date: z.string().min(1, "Date is required (YYYY-MM-DD format)"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { service_id, date } = parsedArgs;
+        
+        if (!isValidDate(date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        const timeSlots = await getAvailableTimeSlots(business_id, service_id, date);
+        
+        if (!timeSlots || timeSlots.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No available time slots found for this service and date.",
+              },
+            ],
+          };
+        }
+
+        const slotsList = timeSlots
+          .map((slot: any) => 
+            `Staff: ${slot.first_name} ${slot.last_name}\nService: ${slot.service_name}\nTime: ${slot.slot_start_time} - ${slot.slot_end_time}\nDuration: ${slot.duration_minutes} minutes\nStatus: ${slot.availability_status}\nExisting Appointments: ${slot.existing_appointments}/${slot.max_bookings_per_slot}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Available Time Slots for ${date}:\n\n${slotsList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting available time slots: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_all_staff_info": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        
+        const staffInfo = await getAllStaffInfo(business_id);
+        
+        if (!staffInfo || staffInfo.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No staff members found.",
+              },
+            ],
+          };
+        }
+
+        const staffList = staffInfo
+          .map((staff: any) => 
+            `ID: ${staff.staff_id}\nName: ${staff.first_name} ${staff.last_name}\nEmail: ${staff.email}\nPhone: ${staff.phone_number}\nBio: ${staff.bio || 'No bio'}\nServices: ${staff.services_provided || 'No services assigned'}\nTotal Services: ${staff.total_services}\nWorking Hours: ${staff.working_hours_summary || 'No working hours set'}\nUpcoming Appointments: ${staff.upcoming_appointments}\nCompleted Appointments: ${staff.completed_appointments}\nActive: ${staff.is_active ? 'Yes' : 'No'}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Staff Information:\n\n${staffList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting staff information: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_staff_member": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        staff_id: z.string().min(1, "Staff ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { staff_id } = parsedArgs;
+        
+        const staff = await getStaffMember(business_id, staff_id);
+        
+        const servicesList = staff.services && staff.services.length > 0 
+          ? staff.services.map((service: any) => `${service.name} (${service.duration_minutes} min, $${(service.price_cents / 100).toFixed(2)})`).join(', ')
+          : 'No services assigned';
+        
+        const workingHoursList = staff.working_hours && staff.working_hours.length > 0
+          ? staff.working_hours.map((hour: any) => `${hour.day_name}: ${hour.open_time} - ${hour.close_time} (${hour.is_available ? 'Available' : 'Not Available'})`).join('\n')
+          : 'No working hours set';
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Staff Member Details:\n\nID: ${staff.staff_id}\nName: ${staff.first_name} ${staff.last_name}\nEmail: ${staff.email}\nPhone: ${staff.phone_number}\nBio: ${staff.bio || 'No bio'}\nAvatar: ${staff.avatar_url || 'No avatar'}\nActive: ${staff.is_active ? 'Yes' : 'No'}\n\nServices Provided:\n${servicesList}\n\nWorking Hours:\n${workingHoursList}\n\nAppointments:\nUpcoming: ${staff.upcoming_appointments}\nCompleted: ${staff.completed_appointments}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting staff member: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_staff_time_off": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        start_date: z.string().optional(),
+        end_date: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { start_date, end_date } = parsedArgs;
+        
+        if (start_date && !isValidDate(start_date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid start date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        if (end_date && !isValidDate(end_date)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Error: Invalid end date format. Please use YYYY-MM-DD format.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        
+        const timeOff = await getStaffTimeOff(business_id, start_date, end_date);
+        
+        if (!timeOff || timeOff.length === 0) {
+          const dateRange = start_date && end_date ? ` between ${start_date} and ${end_date}` : start_date ? ` from ${start_date}` : '';
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No staff time off found${dateRange}.`,
+              },
+            ],
+          };
+        }
+
+        const timeOffList = timeOff
+          .map((item: any) => 
+            `ID: ${item.id}\nStaff: ${item.first_name} ${item.last_name}\nTitle: ${item.title || 'No title'}\nDescription: ${item.description || 'No description'}\nDate: ${item.date}\nTime: ${item.is_all_day ? 'All day' : `${item.start_time} - ${item.end_time}`}\nCreated: ${new Date(item.created_at).toLocaleDateString()}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Staff Time Off:\n\n${timeOffList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting staff time off: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       return {
         content: [
@@ -956,7 +1263,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Additional notes about the customer (optional)",
             },
           },
-          required: ["first_name", "last_name", "email"],
+          required: ["phone"],
         },
       },
       {
@@ -1105,14 +1412,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                   phone: {
                     type: "string",
-                    description: "Customer's phone number (optional)",
+                    description: "Customer's phone number",
                   },
                   notes: {
                     type: "string",
                     description: "Additional notes about the customer (optional)",
                   },
                 },
-                required: ["customer_id"],
+                required: ["customer_id", "phone"],
               },
             },
             {
@@ -1169,6 +1476,100 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                   },
                 },
                 required: ["appointment_id", "customer_id", "service_id", "rating"],
+              },
+            },
+            {
+              name: "get_staff_availability",
+              description: "Get staff availability for a specific date",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check availability (YYYY-MM-DD format)",
+                  },
+                },
+                required: ["date"],
+              },
+            },
+            {
+              name: "get_available_time_slots",
+              description: "Get available time slots for a specific service on a date",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  service_id: {
+                    type: "string",
+                    description: "The service ID",
+                  },
+                  date: {
+                    type: "string",
+                    description: "The date to check availability (YYYY-MM-DD format)",
+                  },
+                },
+                required: ["service_id", "date"],
+              },
+            },
+            {
+              name: "get_all_staff_info",
+              description: "Get detailed information about all staff members",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                },
+                required: [],
+              },
+            },
+            {
+              name: "get_staff_member",
+              description: "Get detailed information about a specific staff member",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID",
+                  },
+                },
+                required: ["staff_id"],
+              },
+            },
+            {
+              name: "get_staff_time_off",
+              description: "Get staff time off for a specific date range",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  start_date: {
+                    type: "string",
+                    description: "Start date for time off (YYYY-MM-DD format, optional)",
+                  },
+                  end_date: {
+                    type: "string",
+                    description: "End date for time off (YYYY-MM-DD format, optional)",
+                  },
+                },
+                required: [],
               },
             },
     ],
