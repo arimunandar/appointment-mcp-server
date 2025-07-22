@@ -280,10 +280,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "create_customer": {
       const schema = z.object({
         business_id: z.string().optional(),
-        first_name: z.string().min(1, "First name is required"),
-        last_name: z.string().min(1, "Last name is required"),
-        email: z.string().email("Valid email is required"),
-        phone: z.string().optional(),
+        first_name: z.string().optional(),
+        last_name: z.string().optional(),
+        email: z.string().optional(),
+        phone: z.string(),
         notes: z.string().optional(),
       });
 

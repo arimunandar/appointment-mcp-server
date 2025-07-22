@@ -79,11 +79,11 @@ export async function getBusinessDetails(business_id: string) {
 
 // Customer management functions
 export async function createCustomer(business_id: string, customerData: {
-  first_name: string;
-  last_name: string;
-  email: string;
-  phone?: string;
-  notes?: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  phone: string;
+  notes?: string | null;
 }) {
   try {
     const result = await query(
@@ -92,10 +92,10 @@ export async function createCustomer(business_id: string, customerData: {
    RETURNING *`,
       [
         business_id,
-        customerData.first_name,
-        customerData.last_name,
-        customerData.email,
-        customerData.phone || null,
+        customerData.first_name || null,
+        customerData.last_name || null,
+        customerData.email || null,
+        customerData.phone,
         customerData.notes || null,
         new Date().toISOString(),
         new Date().toISOString()
