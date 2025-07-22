@@ -6,7 +6,8 @@
         "/Users/ari/Projects/AI/POC/appointment_mcp/build/index.js"
       ],
       "env": {
-        "NODE_ENV": "production"
+        "BUSINESS_ID": "your-business-uuid-here",
+        "DATABASE_URL": "postgresql://username:password@localhost:5432/appointment_db"
       }
     }
   }

@@ -1,7 +1,7 @@
 {
   "name": "appointment-mcp-server",
-  "version": "1.0.0",
-  "description": "Simple MCP Server for appointment management",
+  "version": "1.3.0",
+  "description": "MCP Server for appointment management with PostgreSQL support",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -13,16 +13,36 @@
     "dev": "npm run build && npm start",
     "prepublishOnly": "npm run build"
   },
-  "files": ["build", "README.md"],
+  "files": [
+    "build",
+    "README.md",
+    "customer_inquiry_prompt.md",
+    "customer_inquiry_resources.md",
+    "database_schema.sql",
+    "mcp-config-example.json",
+    ".env.example"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.5.0",
+    "pg": "^8.11.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.10.0",
     "typescript": "^5.0.0"
   },
-  "keywords": ["mcp", "server", "appointment", "claude", "anthropic", "model-context-protocol"],
+  "keywords": [
+    "mcp",
+    "server",
+    "appointment",
+    "customer-service",
+    "booking",
+    "postgresql",
+    "claude",
+    "anthropic",
+    "model-context-protocol"
+  ],
   "author": "Ari",
   "license": "MIT",
   "repository": {

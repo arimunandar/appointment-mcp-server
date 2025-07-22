@@ -7,24 +7,49 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import {
+  pool,
+  createAppointment,
+  getAppointments,
+  getAppointment,
+  deleteAppointment,
+  ensureBusinessExists,
+  getBusinessDetails,
+  verifyDatabaseConnection,
+  createCustomer,
+  getCustomer,
+  searchCustomers,
+  updateCustomer,
+  getServices,
+  getService,
+  getCustomerAppointments,
+  getBusinessHours,
+  getStaff,
+  getCustomerReviews,
+  createReview
+} from "./database.js";
 
-// Simple in-memory appointment storage
-interface Appointment {
-  id: string;
-  title: string;
-  date: string;
-  time: string;
-  description?: string;
+// Get BUSINESS_ID from environment variables
+const DEFAULT_BUSINESS_ID = process.env.BUSINESS_ID;
+
+if (!DEFAULT_BUSINESS_ID) {
+  console.warn('Warning: BUSINESS_ID environment variable not set. All operations will require explicit business_id parameter.');
 }
 
-let appointments: Appointment[] = [];
-let nextId = 1;
+// Helper function to get business ID (use provided or default)
+function getBusinessId(providedBusinessId?: string): string {
+  const businessId = providedBusinessId || DEFAULT_BUSINESS_ID;
+  if (!businessId) {
+    throw new Error('Business ID is required. Either provide business_id parameter or set BUSINESS_ID environment variable.');
+  }
+  return businessId;
+}
 
 // Create server instance
 const server = new Server(
   {
     name: "appointment-mcp-server",
-    version: "1.0.0",
+    version: "1.3.0",
   },
   {
     capabilities: {
@@ -32,11 +57,6 @@ const server = new Server(
     },
   }
 );
-
-// Helper function to generate unique ID
-function generateId(): string {
-  return (nextId++).toString();
-}
 
 // Helper function to validate date format (YYYY-MM-DD)
 function isValidDate(dateString: string): boolean {
@@ -59,30 +79,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (name) {
     case "create_appointment": {
       const schema = z.object({
-        title: z.string().min(1, "Title is required"),
-        date: z.string().refine(isValidDate, "Date must be in YYYY-MM-DD format"),
-        time: z.string().refine(isValidTime, "Time must be in HH:MM format"),
-        description: z.string().optional(),
+        business_id: z.string().optional(),
+        customer_id: z.string().min(1, "Customer ID is required"),
+        service_id: z.string().min(1, "Service ID is required"),
+        staff_id: z.string().optional(),
+        start_time: z.string().min(1, "Start time is required"),
+        end_time: z.string().min(1, "End time is required"),
+        notes: z.string().optional(),
       });
 
       try {
-        const { title, date, time, description } = schema.parse(args);
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const appointmentData = { ...parsedArgs, business_id };
         
-        const appointment: Appointment = {
-          id: generateId(),
-          title,
-          date,
-          time,
-          description,
-        };
+        // Ensure business exists
+        await ensureBusinessExists(business_id);
         
-        appointments.push(appointment);
+        const appointment = await createAppointment(business_id, appointmentData);
         
         return {
           content: [
             {
               type: "text",
-              text: `Appointment created successfully!\n\nID: ${appointment.id}\nTitle: ${appointment.title}\nDate: ${appointment.date}\nTime: ${appointment.time}${appointment.description ? `\nDescription: ${appointment.description}` : ''}`,
+              text: `Appointment created successfully!\n\nID: ${appointment.id}\nCustomer ID: ${appointment.customer_id}\nService ID: ${appointment.service_id}\nStart Time: ${appointment.start_time}\nEnd Time: ${appointment.end_time}${appointment.notes ? `\nNotes: ${appointment.notes}` : ''}`,
             },
           ],
         };
@@ -100,59 +120,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case "list_appointments": {
-      if (appointments.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "No appointments found.",
-            },
-          ],
-        };
-      }
-
-      const appointmentList = appointments
-        .map((apt) => 
-          `ID: ${apt.id}\nTitle: ${apt.title}\nDate: ${apt.date}\nTime: ${apt.time}${apt.description ? `\nDescription: ${apt.description}` : ''}\n---`
-        )
-        .join("\n");
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Found ${appointments.length} appointment(s):\n\n${appointmentList}`,
-          },
-        ],
-      };
-    }
-
-    case "get_appointment": {
       const schema = z.object({
-        id: z.string().min(1, "Appointment ID is required"),
+        business_id: z.string().optional(),
+        customer_id: z.string().optional(),
+        service_id: z.string().optional(),
+        staff_id: z.string().optional(),
+        status: z.string().optional(),
+        start_date: z.string().optional(),
+        end_date: z.string().optional(),
       });
 
       try {
-        const { id } = schema.parse(args);
-        const appointment = appointments.find((apt) => apt.id === id);
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { business_id: _, ...filters } = parsedArgs;
         
-        if (!appointment) {
+        const appointments = await getAppointments(business_id, filters);
+
+        if (!appointments || appointments.length === 0) {
           return {
             content: [
               {
                 type: "text",
-                text: `Appointment with ID ${id} not found.`,
+                text: "No appointments found.",
               },
             ],
-            isError: true,
           };
         }
+
+        const appointmentList = appointments
+          .map((apt: any) => 
+            `ID: ${apt.id}\nCustomer: ${apt.customer_first_name} ${apt.customer_last_name}\nService: ${apt.service_name}\nStaff: ${apt.staff_first_name ? `${apt.staff_first_name} ${apt.staff_last_name}` : 'Not assigned'}\nStart: ${apt.start_time}\nEnd: ${apt.end_time}\nStatus: ${apt.status}\n---`
+          )
+          .join("\n");
 
         return {
           content: [
             {
               type: "text",
-              text: `Appointment Details:\n\nID: ${appointment.id}\nTitle: ${appointment.title}\nDate: ${appointment.date}\nTime: ${appointment.time}${appointment.description ? `\nDescription: ${appointment.description}` : ''}`,
+              text: `Found ${appointments.length} appointment(s):\n\n${appointmentList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error listing appointments: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_appointment": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        id: z.string().min(1, "Appointment ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { id } = parsedArgs;
+        
+        const appointment = await getAppointment(business_id, id);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Appointment Details:\n\nID: ${appointment.id}\nCustomer: ${appointment.customer_first_name} ${appointment.customer_last_name}\nEmail: ${appointment.customer_email}\nPhone: ${appointment.customer_phone || 'Not provided'}\nService: ${appointment.service_name}\nDescription: ${appointment.service_description || 'No description'}\nDuration: ${appointment.duration_minutes} minutes\nPrice: $${(appointment.price_cents / 100).toFixed(2)}\nStaff: ${appointment.staff_first_name ? `${appointment.staff_first_name} ${appointment.staff_last_name}` : 'Not assigned'}\nStart Time: ${appointment.start_time}\nEnd Time: ${appointment.end_time}\nStatus: ${appointment.status}\nNotes: ${appointment.notes || 'No notes'}\nCreated: ${new Date(appointment.created_at).toLocaleString()}`,
             },
           ],
         };
@@ -171,32 +211,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case "delete_appointment": {
       const schema = z.object({
+        business_id: z.string().optional(),
         id: z.string().min(1, "Appointment ID is required"),
       });
 
       try {
-        const { id } = schema.parse(args);
-        const index = appointments.findIndex((apt) => apt.id === id);
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { id } = parsedArgs;
         
-        if (index === -1) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Appointment with ID ${id} not found.`,
-              },
-            ],
-            isError: true,
-          };
-        }
+        const deletedAppointment = await deleteAppointment(business_id, id);
 
-        const deletedAppointment = appointments.splice(index, 1)[0];
-        
         return {
           content: [
             {
               type: "text",
-              text: `Appointment "${deletedAppointment.title}" (ID: ${deletedAppointment.id}) has been deleted successfully.`,
+              text: `Appointment deleted successfully!\n\nDeleted appointment ID: ${deletedAppointment.id}\nCustomer ID: ${deletedAppointment.customer_id}\nService ID: ${deletedAppointment.service_id}\nStart Time: ${deletedAppointment.start_time}`,
             },
           ],
         };
@@ -206,6 +236,545 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: "text",
               text: `Error deleting appointment: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Business Information Tools
+    case "get_business": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        
+        const business = await getBusinessDetails(business_id);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Business Details:\n\nID: ${business.id}\nName: ${business.name}\nDescription: ${business.description || 'No description'}\nAddress: ${business.address || 'Not provided'}\nPhone: ${business.phone || 'Not provided'}\nEmail: ${business.email || 'Not provided'}\nWebsite: ${business.website || 'Not provided'}\nTimezone: ${business.timezone || 'Not specified'}\nCreated: ${new Date(business.created_at).toLocaleString()}\nUpdated: ${new Date(business.updated_at).toLocaleString()}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving business details: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Customer Management Tools
+    case "create_customer": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        first_name: z.string().min(1, "First name is required"),
+        last_name: z.string().min(1, "Last name is required"),
+        email: z.string().email("Valid email is required"),
+        phone: z.string().optional(),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { business_id: _, ...customerData } = parsedArgs;
+        
+        await ensureBusinessExists(business_id);
+        const customer = await createCustomer(business_id, customerData);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Customer created successfully!\n\nID: ${customer.id}\nName: ${customer.first_name} ${customer.last_name}\nEmail: ${customer.email}\nPhone: ${customer.phone_number || 'Not provided'}\nNotes: ${customer.notes || 'No notes'}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error creating customer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_customer": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        customer_id: z.string().min(1, "Customer ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { customer_id } = parsedArgs;
+        
+        const customer = await getCustomer(business_id, customer_id);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Customer Details:\n\nID: ${customer.id}\nName: ${customer.first_name} ${customer.last_name}\nEmail: ${customer.email}\nPhone: ${customer.phone_number || 'Not provided'}\nNotes: ${customer.notes || 'No notes'}\nCreated: ${new Date(customer.created_at).toLocaleString()}\nUpdated: ${new Date(customer.updated_at).toLocaleString()}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving customer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "search_customers": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        search_term: z.string().min(1, "Search term is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { search_term } = parsedArgs;
+        
+        const customers = await searchCustomers(business_id, search_term);
+        
+        if (!customers || customers.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No customers found matching "${search_term}".`,
+              },
+            ],
+          };
+        }
+
+        const customerList = customers
+          .map((customer: any) => 
+            `ID: ${customer.id}\nName: ${customer.first_name} ${customer.last_name}\nEmail: ${customer.email}\nPhone: ${customer.phone_number || 'Not provided'}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${customers.length} customer(s) matching "${search_term}":\n\n${customerList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error searching customers: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Service Information Tools
+    case "get_services": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        
+        const services = await getServices(business_id);
+        
+        if (!services || services.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No services found.",
+              },
+            ],
+          };
+        }
+
+        const serviceList = services
+          .map((service: any) => 
+            `ID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: $${(service.price_cents / 100).toFixed(2)}\nCategory: ${service.category_name || 'Uncategorized'}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${services.length} service(s):\n\n${serviceList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving services: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_service": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        service_id: z.string().min(1, "Service ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { service_id } = parsedArgs;
+        
+        const service = await getService(business_id, service_id);
+        
+        const staffList = service.staff && service.staff.length > 0 
+          ? service.staff.map((staff: any) => `${staff.first_name} ${staff.last_name}`).join(', ')
+          : 'No staff assigned';
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Service Details:\n\nID: ${service.id}\nName: ${service.name}\nDescription: ${service.description || 'No description'}\nDuration: ${service.duration_minutes} minutes\nPrice: $${(service.price_cents / 100).toFixed(2)}\nCategory: ${service.category_name || 'Uncategorized'}\nCategory Description: ${service.category_description || 'No category description'}\nAvailable Staff: ${staffList}\nActive: ${service.is_active ? 'Yes' : 'No'}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving service: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Customer History Tools
+    case "get_customer_appointments": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        customer_id: z.string().min(1, "Customer ID is required"),
+        limit: z.number().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { customer_id, limit } = parsedArgs;
+        
+        const appointments = await getCustomerAppointments(business_id, customer_id, limit);
+        
+        if (!appointments || appointments.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No appointments found for this customer.",
+              },
+            ],
+          };
+        }
+
+        const appointmentList = appointments
+          .map((apt: any) => 
+            `ID: ${apt.id}\nService: ${apt.service_name}\nStaff: ${apt.staff_first_name ? `${apt.staff_first_name} ${apt.staff_last_name}` : 'Not assigned'}\nStart: ${apt.start_time}\nEnd: ${apt.end_time}\nStatus: ${apt.status}\nDuration: ${apt.duration_minutes} minutes\nPrice: $${(apt.price_cents / 100).toFixed(2)}${apt.rating ? `\nRating: ${apt.rating}/5` : ''}${apt.review_text ? `\nReview: ${apt.review_text}` : ''}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${appointments.length} appointment(s) for customer:\n\n${appointmentList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving customer appointments: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // Business Information Tools
+    case "get_business_hours": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        
+        const hours = await getBusinessHours(business_id);
+        
+        if (!hours || hours.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No business hours found.",
+              },
+            ],
+          };
+        }
+
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const hoursList = hours
+          .map((hour: any) => 
+            `${dayNames[hour.day_of_week]}: ${hour.is_open ? `${hour.open_time} - ${hour.close_time}` : 'Closed'}`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Business Hours:\n\n${hoursList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving business hours: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_staff": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        
+        const staff = await getStaff(business_id);
+        
+        if (!staff || staff.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No staff members found.",
+              },
+            ],
+          };
+        }
+
+        const staffList = staff
+          .map((member: any) => {
+            const services = member.services && member.services.length > 0
+              ? member.services.map((s: any) => s.name).join(', ')
+              : 'No services assigned';
+            
+            return `ID: ${member.id}\nName: ${member.first_name} ${member.last_name}\nEmail: ${member.email || 'Not provided'}\nPhone: ${member.phone || 'Not provided'}\nBio: ${member.bio || 'No bio'}\nServices: ${services}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${staff.length} staff member(s):\n\n${staffList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving staff: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "update_customer": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        customer_id: z.string().min(1, "Customer ID is required"),
+        first_name: z.string().optional(),
+        last_name: z.string().optional(),
+        email: z.string().email().optional(),
+        phone: z.string().optional(),
+        notes: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args) as any;
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { business_id: _, customer_id, phone, ...updates } = parsedArgs;
+        
+        // Include phone in updates since database column is 'phone'
+        const customerUpdates: any = { ...updates };
+        if (phone !== undefined) {
+          customerUpdates.phone = phone;
+        }
+        
+        const customer = await updateCustomer(business_id, customer_id, customerUpdates);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Customer updated successfully!\n\nID: ${customer.id}\nName: ${customer.first_name} ${customer.last_name}\nEmail: ${customer.email}\nPhone: ${customer.phone_number || 'Not provided'}\nNotes: ${customer.notes || 'No notes'}\nUpdated: ${new Date(customer.updated_at).toLocaleString()}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error updating customer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "get_customer_reviews": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        customer_id: z.string().min(1, "Customer ID is required"),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { customer_id } = parsedArgs;
+        
+        const reviews = await getCustomerReviews(business_id, customer_id);
+        
+        if (!reviews || reviews.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No reviews found for this customer.",
+              },
+            ],
+          };
+        }
+
+        const reviewList = reviews
+          .map((review: any) => 
+            `ID: ${review.id}\nService: ${review.service_name}\nStaff: ${review.staff_first_name ? `${review.staff_first_name} ${review.staff_last_name}` : 'Not specified'}\nRating: ${review.rating}/5\nReview: ${review.review_text || 'No review text'}\nAppointment Date: ${review.start_time ? new Date(review.start_time).toLocaleDateString() : 'Not available'}\nReview Date: ${new Date(review.created_at).toLocaleDateString()}\n---`
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${reviews.length} review(s) for customer:\n\n${reviewList}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error retrieving customer reviews: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case "create_review": {
+      const schema = z.object({
+        business_id: z.string().optional(),
+        appointment_id: z.string().min(1, "Appointment ID is required"),
+        customer_id: z.string().min(1, "Customer ID is required"),
+        service_id: z.string().min(1, "Service ID is required"),
+        staff_id: z.string().optional(),
+        rating: z.number().min(1).max(5, "Rating must be between 1 and 5"),
+        review_text: z.string().optional(),
+      });
+
+      try {
+        const parsedArgs = schema.parse(args);
+        const business_id = getBusinessId(parsedArgs.business_id);
+        const { business_id: _, ...reviewData } = parsedArgs;
+        
+        await ensureBusinessExists(business_id);
+        const review = await createReview(business_id, reviewData);
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Review created successfully!\n\nID: ${review.id}\nAppointment ID: ${review.appointment_id}\nCustomer ID: ${review.customer_id}\nService ID: ${review.service_id}\nStaff ID: ${review.staff_id || 'Not specified'}\nRating: ${review.rating}/5\nReview: ${review.review_text || 'No review text'}\nCreated: ${new Date(review.created_at).toLocaleString()}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error creating review: ${error instanceof Error ? error.message : 'Unknown error'}`,
             },
           ],
           isError: true,
@@ -236,43 +805,89 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
-            title: {
+            business_id: {
               type: "string",
-              description: "The title of the appointment",
+              description: "The business ID",
             },
-            date: {
+            customer_id: {
               type: "string",
-              description: "The date of the appointment (YYYY-MM-DD format)",
+              description: "The customer ID",
             },
-            time: {
+            service_id: {
               type: "string",
-              description: "The time of the appointment (HH:MM format)",
+              description: "The service ID",
             },
-            description: {
+            staff_id: {
               type: "string",
-              description: "Optional description of the appointment",
+              description: "The staff member ID (optional)",
+            },
+            start_time: {
+              type: "string",
+              description: "Start time in ISO format (e.g., 2024-01-15T10:00:00Z)",
+            },
+            end_time: {
+              type: "string",
+              description: "End time in ISO format (e.g., 2024-01-15T11:00:00Z)",
+            },
+            notes: {
+              type: "string",
+              description: "Optional notes for the appointment",
             },
           },
-          required: ["title", "date", "time"],
+          required: ["customer_id", "service_id", "start_time", "end_time"],
         },
       },
       {
         name: "list_appointments",
-        description: "List all appointments",
+        description: "List appointments with optional filters",
         inputSchema: {
           type: "object",
-          properties: {},
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+            customer_id: {
+              type: "string",
+              description: "Filter by customer ID (optional)",
+            },
+            service_id: {
+              type: "string",
+              description: "Filter by service ID (optional)",
+            },
+            staff_id: {
+              type: "string",
+              description: "Filter by staff ID (optional)",
+            },
+            status: {
+              type: "string",
+              description: "Filter by status (optional)",
+            },
+            start_date: {
+              type: "string",
+              description: "Filter appointments from this date (optional)",
+            },
+            end_date: {
+              type: "string",
+              description: "Filter appointments until this date (optional)",
+            },
+          },
+          required: [],
         },
       },
       {
         name: "get_appointment",
-        description: "Get details of a specific appointment by ID",
+        description: "Get a specific appointment by ID",
         inputSchema: {
           type: "object",
           properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
             id: {
               type: "string",
-              description: "The ID of the appointment to retrieve",
+              description: "The appointment ID",
             },
           },
           required: ["id"],
@@ -284,28 +899,296 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
             id: {
               type: "string",
-              description: "The ID of the appointment to delete",
+              description: "The appointment ID to delete",
             },
           },
           required: ["id"],
         },
       },
+      {
+        name: "get_business",
+        description: "Get business details by business ID",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "create_customer",
+        description: "Create a new customer",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+            first_name: {
+              type: "string",
+              description: "Customer's first name",
+            },
+            last_name: {
+              type: "string",
+              description: "Customer's last name",
+            },
+            email: {
+              type: "string",
+              description: "Customer's email address",
+            },
+            phone: {
+              type: "string",
+              description: "Customer's phone number (optional)",
+            },
+            notes: {
+              type: "string",
+              description: "Additional notes about the customer (optional)",
+            },
+          },
+          required: ["first_name", "last_name", "email"],
+        },
+      },
+      {
+        name: "get_customer",
+        description: "Get customer details by ID",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+            customer_id: {
+              type: "string",
+              description: "The customer ID",
+            },
+          },
+          required: ["customer_id"],
+        },
+      },
+      {
+        name: "search_customers",
+        description: "Search customers by name, email, or phone",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+            search_term: {
+              type: "string",
+              description: "Search term to match against customer name, email, or phone",
+            },
+          },
+          required: ["search_term"],
+        },
+      },
+      {
+        name: "get_services",
+        description: "Get all available services",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "get_service",
+        description: "Get detailed information about a specific service",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+            service_id: {
+              type: "string",
+              description: "The service ID",
+            },
+          },
+          required: ["service_id"],
+        },
+      },
+      {
+        name: "get_customer_appointments",
+        description: "Get appointment history for a specific customer",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+            customer_id: {
+              type: "string",
+              description: "The customer ID",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of appointments to return (optional)",
+            },
+          },
+          required: ["customer_id"],
+        },
+      },
+      {
+        name: "get_business_hours",
+        description: "Get business operating hours",
+        inputSchema: {
+          type: "object",
+          properties: {
+            business_id: {
+              type: "string",
+              description: "The business ID",
+            },
+          },
+          required: ["business_id"],
+        },
+      },
+      {
+              name: "get_staff",
+              description: "Get information about staff members",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                },
+                required: [],
+              },
+            },
+            {
+              name: "update_customer",
+              description: "Update an existing customer",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID",
+                  },
+                  first_name: {
+                    type: "string",
+                    description: "Customer's first name (optional)",
+                  },
+                  last_name: {
+                    type: "string",
+                    description: "Customer's last name (optional)",
+                  },
+                  email: {
+                    type: "string",
+                    description: "Customer's email address (optional)",
+                  },
+                  phone: {
+                    type: "string",
+                    description: "Customer's phone number (optional)",
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Additional notes about the customer (optional)",
+                  },
+                },
+                required: ["customer_id"],
+              },
+            },
+            {
+              name: "get_customer_reviews",
+              description: "Get reviews for a specific customer",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID",
+                  },
+                },
+                required: ["business_id", "customer_id"],
+              },
+            },
+            {
+              name: "create_review",
+              description: "Create a new review for an appointment",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  business_id: {
+                    type: "string",
+                    description: "The business ID",
+                  },
+                  appointment_id: {
+                    type: "string",
+                    description: "The appointment ID",
+                  },
+                  customer_id: {
+                    type: "string",
+                    description: "The customer ID",
+                  },
+                  service_id: {
+                    type: "string",
+                    description: "The service ID",
+                  },
+                  staff_id: {
+                    type: "string",
+                    description: "The staff member ID (optional)",
+                  },
+                  rating: {
+                    type: "number",
+                    description: "Rating from 1 to 5",
+                  },
+                  review_text: {
+                    type: "string",
+                    description: "Review text (optional)",
+                  },
+                },
+                required: ["appointment_id", "customer_id", "service_id", "rating"],
+              },
+            },
     ],
   };
 });
 
 // Start the server
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  
-  // Log to stderr (not stdout to avoid corrupting JSON-RPC)
-  console.error("Appointment MCP Server running on stdio");
+  try {
+    // Verify database connection on startup
+    await verifyDatabaseConnection();
+    console.log('Database connection verified successfully');
+    
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.log('Appointment MCP Server running on stdio');
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
 }
 
-main().catch((error) => {
-  console.error("Server error:", error);
-  process.exit(1);
-});
+main();
