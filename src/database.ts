@@ -934,43 +934,62 @@ export async function checkServiceAvailability(business_id: string, service_name
       }
     }
 
-    // Check existing appointments for this service and date
-    const appointmentsResult = await query(
-      `SELECT staff_id, COUNT(*) as appointment_count
-       FROM appointments
-       WHERE business_id = $1 
-         AND service_id = $2
-         AND DATE(start_time) = $3::date
-         AND status IN ('confirmed', 'pending', 'scheduled')
-       GROUP BY staff_id`,
-      [business_id, service.id, date]
-    );
+    // Check existing appointments for this service and date at the specific time slot
+    let appointmentsQuery = '';
+    let appointmentParams = [business_id, service.id, date];
+    
+    if (time) {
+      // If specific time is requested, check appointments that overlap with the requested time slot
+      const requestedTime = new Date(`2000-01-01T${time}`);
+      const slotEndTime = new Date(requestedTime.getTime() + service.duration_minutes * 60000);
+      
+      appointmentsQuery = `
+        SELECT COUNT(*) as appointment_count
+        FROM appointments
+        WHERE business_id = $1 
+          AND service_id = $2
+          AND DATE(start_time) = $3::date
+          AND status IN ('confirmed', 'pending', 'scheduled')
+          AND (
+            (start_time::time >= $4::time AND start_time::time < $5::time) OR
+            (end_time::time > $4::time AND end_time::time <= $5::time) OR
+            (start_time::time <= $4::time AND end_time::time >= $5::time)
+          )`;
+      appointmentParams.push(time, slotEndTime.toTimeString().slice(0, 8));
+    } else {
+      // If no specific time, check total appointments for the day
+      appointmentsQuery = `
+        SELECT COUNT(*) as appointment_count
+        FROM appointments
+        WHERE business_id = $1 
+          AND service_id = $2
+          AND DATE(start_time) = $3::date
+          AND status IN ('confirmed', 'pending', 'scheduled')`;
+    }
 
-    const appointmentCounts = new Map();
-    appointmentsResult.rows.forEach((row: any) => {
-      appointmentCounts.set(row.staff_id, parseInt(row.appointment_count));
-    });
+    const appointmentsResult = await query(appointmentsQuery, appointmentParams);
+    const existingAppointments = parseInt(appointmentsResult.rows[0].appointment_count);
 
-    // Filter staff based on booking capacity
-    const fullyBookedStaff = availableStaff.filter((staff: any) => {
-      const existingAppointments = appointmentCounts.get(staff.staff_id) || 0;
-      return existingAppointments >= service.max_bookings_per_slot;
-    });
-
-    const availableStaffWithCapacity = availableStaff.filter((staff: any) => {
-      const existingAppointments = appointmentCounts.get(staff.staff_id) || 0;
-      return existingAppointments < service.max_bookings_per_slot;
-    });
+    // Check if the service has reached its booking capacity
+    if (existingAppointments >= service.max_bookings_per_slot) {
+      return {
+        available: false,
+        reason: `${service.name} is fully booked on ${date}${time ? ` at ${time}` : ''} (${existingAppointments}/${service.max_bookings_per_slot} slots taken)`,
+        service: service,
+        staff: availableStaff,
+        existingAppointments: existingAppointments,
+        maxBookings: service.max_bookings_per_slot
+      };
+    }
 
     return {
-      available: availableStaffWithCapacity.length > 0,
-      reason: availableStaffWithCapacity.length > 0 
-        ? `${service.name} is available on ${date}` 
-        : `All staff are fully booked for ${service.name} on ${date}`,
+      available: true,
+      reason: `${service.name} is available on ${date}${time ? ` at ${time}` : ''} (${service.max_bookings_per_slot - existingAppointments} slots remaining)`,
       service: service,
-      staff: availableStaffWithCapacity,
-      fullyBookedStaff: fullyBookedStaff,
-      totalStaff: staffResult.rows
+      staff: availableStaff,
+      existingAppointments: existingAppointments,
+      maxBookings: service.max_bookings_per_slot,
+      remainingSlots: service.max_bookings_per_slot - existingAppointments
     };
   } catch (error: any) {
     throw new Error(`Failed to check service availability: ${error.message}`);
@@ -1009,16 +1028,27 @@ export async function getServiceTimeSlots(business_id: string, service_name: str
         const slotEnd = new Date(currentTime.getTime() + service.duration_minutes * 60000);
         
         if (slotEnd <= endTime) {
-          timeSlots.push({
-            staff_id: staff.staff_id,
-            staff_name: `${staff.first_name} ${staff.last_name}`,
-            service_id: service.id,
-            service_name: service.name,
-            duration_minutes: service.duration_minutes,
-            start_time: currentTime.toTimeString().slice(0, 8),
-            end_time: slotEnd.toTimeString().slice(0, 8),
-            date: date
-          });
+          const slotStartTime = currentTime.toTimeString().slice(0, 8);
+          const slotEndTime = slotEnd.toTimeString().slice(0, 8);
+          
+          // Check if this specific time slot has availability
+          const slotAvailability = await checkServiceAvailability(business_id, service_name, date, slotStartTime);
+          
+          if (slotAvailability.available) {
+            timeSlots.push({
+              staff_id: staff.staff_id,
+              staff_name: `${staff.first_name} ${staff.last_name}`,
+              service_id: service.id,
+              service_name: service.name,
+              duration_minutes: service.duration_minutes,
+              start_time: slotStartTime,
+              end_time: slotEndTime,
+              date: date,
+              remaining_slots: slotAvailability.remainingSlots,
+              total_slots: slotAvailability.maxBookings,
+              existing_appointments: slotAvailability.existingAppointments
+            });
+          }
         }
         
         currentTime = new Date(currentTime.getTime() + 30 * 60000); // Add 30 minutes
@@ -1026,8 +1056,10 @@ export async function getServiceTimeSlots(business_id: string, service_name: str
     }
 
     return {
-      available: true,
-      reason: `${service.name} is available on ${date}`,
+      available: timeSlots.length > 0,
+      reason: timeSlots.length > 0 
+        ? `${service.name} has ${timeSlots.length} available time slots on ${date}` 
+        : `${service.name} is fully booked on ${date}`,
       timeSlots: timeSlots,
       service: service
     };

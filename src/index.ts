@@ -57,7 +57,7 @@ function getBusinessId(providedBusinessId?: string): string {
 const server = new Server(
   {
     name: "appointment-mcp-server",
-    version: "1.5.0",
+    version: "1.6.0",
   },
   {
     capabilities: {
@@ -1138,12 +1138,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           .join("\n");
 
         const timeInfo = time ? ` at ${time}` : "";
+        const slotInfo = availability.remainingSlots ? `\n\n📊 Booking Status:\n• Total Slots: ${availability.maxBookings}\n• Booked: ${availability.existingAppointments}\n• Available: ${availability.remainingSlots}` : "";
         
         return {
           content: [
             {
               type: "text",
-              text: `✅ ${availability.reason}${timeInfo}\n\nAvailable Staff:\n${staffList}\n\nService: ${availability.service.name}\nDuration: ${availability.service.duration_minutes} minutes`,
+              text: `✅ ${availability.reason}${timeInfo}\n\nAvailable Staff:\n${staffList}${slotInfo}\n\nService: ${availability.service.name}\nDuration: ${availability.service.duration_minutes} minutes`,
             },
           ],
         };
@@ -1199,7 +1200,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const slotsList = result.timeSlots
           .map((slot: any) => 
-            `• ${slot.start_time} - ${slot.end_time} (${slot.staff_name})`
+            `• ${slot.start_time} - ${slot.end_time} (${slot.staff_name})\n  📊 Slots: ${slot.remaining_slots}/${slot.total_slots} available`
           )
           .join("\n");
 
