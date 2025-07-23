@@ -455,7 +455,39 @@ export async function createReview(reviewData: {
   }
 }
 
-// Appointment management functions
+// Helper function to get the actual status constraint values from the database
+async function getStatusConstraintValues(): Promise<string[]> {
+  try {
+    const result = await query(
+      `SELECT pg_get_constraintdef(oid) as definition
+       FROM pg_constraint 
+       WHERE conrelid = 'appointments'::regclass 
+       AND contype = 'c' 
+       AND conname = 'appointments_mvp_status_check'`
+    );
+    
+    if (result.rows.length > 0) {
+      const definition = result.rows[0].definition;
+      console.log('Status constraint definition:', definition);
+      
+      // Parse the constraint definition to extract valid values
+      const match = definition.match(/CHECK \(status IN \(([^)]+)\)\)/i);
+      if (match) {
+        const values = match[1].split(',').map((v: string) => v.trim().replace(/'/g, ''));
+        console.log('Valid status values:', values);
+        return values;
+      }
+    }
+    
+    // Fallback to default values if we can't parse the constraint
+    return ['scheduled', 'confirmed', 'canceled', 'completed', 'no_show'];
+  } catch (error) {
+    console.log('Could not get status constraint values:', error);
+    // Fallback to default values
+    return ['scheduled', 'confirmed', 'canceled', 'completed', 'no_show'];
+  }
+}
+
 // Helper function to create customer if they don't exist
 export async function createCustomerIfNotExists(customerName: string, email?: string, phone?: string) {
   try {
@@ -545,6 +577,11 @@ export async function createAppointment(appointmentData: {
     const endTime = new Date(appointmentData.end_time);
     const durationMinutes = Math.round((endTime.getTime() - startTime.getTime()) / (1000 * 60));
 
+    // Get the actual status constraint values from the database
+    const validStatusValues = await getStatusConstraintValues();
+    const defaultStatus = validStatusValues[0] || 'scheduled';
+    console.log(`Using status: ${defaultStatus} (from valid values: ${validStatusValues.join(', ')})`);
+
     // Check the actual status constraint in the database
     try {
       const constraintResult = await query(
@@ -575,7 +612,7 @@ export async function createAppointment(appointmentData: {
         appointmentData.end_time,
         durationMinutes,
         service.price_cents,
-        'scheduled',
+        defaultStatus,
         appointmentData.notes || null,
         new Date().toISOString(),
         new Date().toISOString()
@@ -595,7 +632,8 @@ export async function createAppointment(appointmentData: {
     
     // If it's a status constraint error, provide more specific guidance
     if (error.message.includes('mvp_status_check') || error.message.includes('status')) {
-      throw new Error(`Status constraint violation. Valid status values are: 'scheduled', 'confirmed', 'canceled', 'completed', 'no_show'. Error: ${error.message}`);
+      const validStatusValues = await getStatusConstraintValues();
+      throw new Error(`Status constraint violation. Valid status values are: ${validStatusValues.map(v => `'${v}'`).join(', ')}. Error: ${error.message}`);
     }
     
     throw new Error(`Failed to create appointment: ${error.message}`);
